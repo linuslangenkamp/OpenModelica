@@ -92,13 +92,13 @@ int multary_simplification_setc_function(DATA *data, threadData_t *threadData)
 /*
 equation index: 1
 type: SIMPLE_ASSIGN
-z = 5.0 + (-time)
+z = 8.0 + time
 */
 void multary_simplification_eqFunction_1(DATA *data, threadData_t *threadData)
 {
   TRACE_PUSH
   const int equationIndexes[2] = {1,1};
-  data->localData[0]->realVars[0] /* z variable */ = 5.0 + (-data->localData[0]->timeValue);
+  data->localData[0]->realVars[0] /* z variable */ = 8.0 + data->localData[0]->timeValue;
   TRACE_POP
 }
 
@@ -248,7 +248,7 @@ void multary_simplification_setupDataStruc(DATA *data, threadData_t *threadData)
   data->modelData->modelFilePrefix = "multary_simplification";
   data->modelData->resultFileName = NULL;
   data->modelData->modelDir = "";
-  data->modelData->modelGUID = "{a1991c27-8b0c-4a57-be79-677331b62b02}";
+  data->modelData->modelGUID = "{5b01ebf9-34ba-4ad2-a438-1e47d480b451}";
   #if defined(OPENMODELICA_XML_FROM_FILE_AT_RUNTIME)
   data->modelData->initXMLData = NULL;
   data->modelData->modelDataXml.infoXMLData = NULL;

@@ -40,6 +40,7 @@ import NFOperator.Op;
 import NFPrefixes.{Variability, Purity};
 import NFInstNode.InstNode;
 import NFEGraph.*;
+import BuiltinSystem = System;
 
 protected
 
@@ -82,11 +83,58 @@ function simplifyEgraph
     EGraph egraph;
     EClassId rootId;
     Extractor extractor;
-    Integer dist, counter, sizestart;
+    Integer dist, counter, sizestart, clock_idx;
+    Real clock_time;
     RuleApplier ruleApplier;
     Boolean saturated;
+    UnorderedMap<Integer, Integer> map1, map2, mapres, d1, d2;
+    Integer size1, size2, newvalue, key, value;
 algorithm
+  clock_idx := 1;
+  BuiltinSystem.realtimeClear(clock_idx);
+  BuiltinSystem.realtimeTick(clock_idx);
   print("----simplifyEgraph-----\n");
+  print("\n------------------------\n");
+  map1 := UnorderedMap.new<Integer>(intMod, intEq);
+  map2 := UnorderedMap.new<Integer>(intMod, intEq);
+  UnorderedMap.add(1,2,map1);
+  UnorderedMap.add(1,-5,map2);
+  UnorderedMap.add(2,7,map1);
+  UnorderedMap.add(2,7,map2);
+  UnorderedMap.add(3,2,map1);
+  UnorderedMap.add(4,1,map2);
+  print("M1\n");
+  for e in UnorderedMap.toList(map1) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  print("M2\n");
+  for e in UnorderedMap.toList(map2) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  print("INTERSECTION\n");
+  for e in UnorderedMap.toList(NFEGraph.ENode.intersectionMap(map1, map2)) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  (mapres, d1, d2) := NFEGraph.ENode.intersectionDifferenceMap(map1, map2);
+  print("INTERSECTION2\n");
+  for e in UnorderedMap.toList(mapres) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  print("DIFF1\n");
+  for e in UnorderedMap.toList(d1) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  print("DIFF2\n");
+  for e in UnorderedMap.toList(d2) loop
+    (key, value) := e;
+    print(intString(key) + "  " + intString(value) + "\n");
+  end for;
+  print("\n------------------------\n");
   print("input: " + Expression.toString(exp) + "\n");
   (egraph, rootId) := EGraph.newFromExp(exp, EGraph.new());
   ruleApplier := RuleApplier.RULEAPPLIER({});
@@ -99,26 +147,27 @@ algorithm
   {"(* ?a ?b)", "(* ?b ?a)", "comm-mul"},
   {"(+ ?a (+ ?b ?c))", "(+ (+ ?a ?b) ?c))", "assoc-add"},
   {"(+ ?a ?a)","(* 2 ?a)", "a+a->2a"},
+  {"(* 2 ?a)", "(+ ?a ?a)", "2a->a+a"},
   {"(+ ?a (* ?b ?a))","(* (+ ?b 1) ?a)", "a + b*a-> (b+1)a"},
   {"(+ (* ?c ?a) (* ?b ?a))","(* (+ ?b ?c) ?a)", "distrib1"},
-  {"(* (+ ?b ?c) ?a)","(+ (* ?c ?a) (* ?b ?a))", "distrib2"},
+  {"(* (+ ?b ?c) ?a)","(+ (* ?b ?a) (* ?c ?a))", "distrib2"},
   {"(* ?a (* ?b ?c))", "(* (* ?a ?b) ?c))", "assoc-mul"},
   {"(* 0 ?a)", "0", "0-mul"},
   {"(* ?a ?a)","(^ ?a 2)", "xx->x^2"},
+  {"(^ ?a 2)", "(* ?a ?a)", "x^2->x*x"},
   {"(^ ?a 0)","1", "pow-0"},
   {"(^ ?a 1)","?a", "pow-1"},
   {"(* (^ ?a ?b) (^ ?a ?c))","(^ ?a (+ ?b ?c))", "pow-rule1"},
-  {"(/ (^ ?a ?c))","(^ ?a (- ?c))", "pow-rule2"},
-  {"(- ?a))", "(* -1 ?a)", "uminus=-1"}});
+  {"(/ (^ ?a ?c))","(^ ?a (- ?c))", "pow-rule2"}});
   saturated := false;
   counter := 0;
   sizestart := UnorderedMap.size(egraph.eclasses);
   print("Size classes: " + intString(sizestart) + "\n");
   while not saturated and counter < sizestart loop
     (egraph, saturated) := RuleApplier.matchApplyRules(ruleApplier, egraph);
+    //EGraph.printAll(rootId, egraph);
     counter := counter + 1;
   end while;
-  //EGraph.printAll(rootId, egraph);
   if saturated then print("saturated! \n"); end if;
   print("Iterations: " + intString(counter) + "\n");
   print("Size classes: " + intString(UnorderedMap.size(egraph.eclasses))+ "\n");
@@ -127,6 +176,8 @@ algorithm
   print("Distance: " + intString(dist) + "\n");
   res := Extractor.build(rootId, extractor);
   print("return: " + Expression.toString(res) + "\n" + "--------------- \n");
+  clock_time := BuiltinSystem.realtimeTock(clock_idx);
+  print("Time: " + realString(clock_time) + "\n");
 end simplifyEgraph;
 
 
@@ -633,7 +684,6 @@ function optInc
     input Option<Integer> oldValue;
     output Integer value;
 algorithm
-
  value := match oldValue
     local
       Integer i;

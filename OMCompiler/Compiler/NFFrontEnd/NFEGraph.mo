@@ -6,21 +6,23 @@ encapsulated package NFEGraph
     import ComponentRef = NFComponentRef;
     import NFOperator.Op;
     import Operator = NFOperator;
+    import Simplify = NFSimplifyExp;
 public
 
-    //TODO: Multary? Restrictions? Assoc
-    //     + better hashes
-    //     restructuring of the analysis would improve the performance
-
-
     type EClassId = Integer;
+
     type UnaryOp = enumeration(
         UMINUS,
         UDIV);
+
     type BinaryOp = enumeration(
         ADD,
         MUL,
         POW);
+
+    type MultaryOp = enumeration(
+        ADD,
+        MUL);
 
     function binaryOpToNFOperator
         input BinaryOp bop;
@@ -50,9 +52,19 @@ public
     algorithm
         op := match uop
             case UnaryOp.UMINUS then "-";
-            case UnaryOp.UDIV then "1/"; // doens't really make sense since there is no unary 1/x op in NFOperator
+            case UnaryOp.UDIV then "1/"; // doesn't really make sense since there is no unary 1/x op in NFOperator
         end match;
     end unaryOpToString;
+
+    function multaryOpToString
+        input MultaryOp mop;
+        output String op;
+    algorithm
+        op := match mop
+            case MultaryOp.ADD then "+";
+            case MultaryOp.MUL then "*";
+        end match;
+    end multaryOpToString;
 
     function unaryOpToNFOperator
         input UnaryOp uop;
@@ -60,9 +72,43 @@ public
     algorithm
         op := match uop
             case UnaryOp.UMINUS then NFOperator.makeUMinus(NFType.REAL());
-            case UnaryOp.UDIV then NFOperator.makeDiv(NFType.REAL()); // doens't really make sense since there is no unary 1/x op in NFOperator
+            case UnaryOp.UDIV then NFOperator.makeDiv(NFType.REAL()); // doesn't really make sense since there is no unary 1/x op in NFOperator
         end match;
     end unaryOpToNFOperator;
+
+    function multaryOpToNFOperator
+        input MultaryOp mop;
+        output NFOperator op;
+    algorithm
+        op := match mop
+            case MultaryOp.ADD then NFOperator.makeAdd(NFType.REAL());
+            case MultaryOp.MUL then NFOperator.makeMul(NFType.REAL());
+        end match;
+    end multaryOpToNFOperator;
+
+    function multaryMakeOp
+        input MultaryOp mop;
+        input Real v1,v2;
+        output Real out;
+    algorithm
+        out := match mop
+            case MultaryOp.ADD then v1 + v2;
+            case MultaryOp.MUL then v1 * v2;
+            else fail();
+        end match;
+    end multaryMakeOp;
+
+    function multaryMakeInvOp
+        input MultaryOp mop;
+        input Real v1, v2;
+        output Real out;
+    algorithm
+        out := match mop
+            case MultaryOp.ADD then v1 - v2;
+            case MultaryOp.MUL then v1 / v2;
+            else fail();
+        end match;
+    end multaryMakeInvOp;
 
     function hashUnaryOp
         input UnaryOp uop;
@@ -87,6 +133,17 @@ public
         end match;
     end hashBinaryOp;
 
+    function hashMultaryOp
+        input MultaryOp mop;
+        output Integer hash;
+    algorithm
+        hash := match mop
+            case MultaryOp.ADD then 1;
+            case MultaryOp.MUL then 2;
+            else 3;
+        end match;
+    end hashMultaryOp;
+
     function neutralElementBinaryOp
         input BinaryOp bop;
         output ENode node;
@@ -99,6 +156,19 @@ public
             else fail();        // later more e.g. unit matrix
         end match;
     end neutralElementBinaryOp;
+
+    function neutralElementMultaryOp
+        input MultaryOp mop;
+        output ENode node;
+    algorithm
+        node := match mop
+            case MultaryOp.ADD
+                then ENode.NUM(0);
+            case MultaryOp.MUL
+                then ENode.NUM(1);
+            else fail();
+        end match;
+    end neutralElementMultaryOp;
 
     function compareUnaryOp
         input UnaryOp uop1, uop2;
@@ -113,6 +183,13 @@ public
     algorithm
         equals := (bop1 == bop2);
     end compareBinaryOp;
+
+    function compareMultaryOp
+        input MultaryOp mop1, mop2;
+        output Boolean equals;
+    algorithm
+        equals := (mop1 == mop2);
+    end compareMultaryOp;
 
     encapsulated uniontype ENode
     import NFEGraph.*;
@@ -136,6 +213,155 @@ public
             BinaryOp op;
         end BINARY;
 
+        record MULTARY
+            UnorderedMap<EClassId, Integer> args;
+            Real const;
+            MultaryOp op;
+        end MULTARY;
+
+        function intersection
+        "intersection on multaries e.g. [(x,3),(y, 1)] & [(x,2),(z, -1)] -> [(x, 2)]
+        runtime: O(min(m1, m2))"
+            input ENode m1, m2;
+            output ENode out;
+        protected
+            UnorderedMap<EClassId, Integer> args1, args2, intersec;
+            Real c1, c2;
+            MultaryOp mop1, mop2;
+        algorithm
+            out := match (m1, m2)
+                case (MULTARY(args1, c1, mop1), MULTARY(args2, c2, mop2)) guard hashMultaryOp(mop1) == hashMultaryOp(mop2) algorithm
+                    if UnorderedMap.size(args1) > UnorderedMap.size(args2) then
+                        intersec := intersectionMap(args2, args1);
+                    else
+                        intersec := intersectionMap(args1, args2);
+                    end if;
+                    then ENode.MULTARY(intersec, min(c1, c2), mop1); // Min not useful for +!! -> maybe intersection in general not useful for + (* + *) -> (U * (/ + /))
+                else fail();
+            end match;
+        end intersection;
+
+        function intersectionMap
+        "helper for intersection: performs an intersection of two integer/integer maps
+        runtime: O(m1)"
+            input UnorderedMap<EClassId, Integer> m1, m2;
+            output UnorderedMap<EClassId, Integer> i;
+        protected
+            EClassId key1;
+            Integer value1;
+            Option<Integer> value2;
+        algorithm
+            i := UnorderedMap.new<EClassId>(intMod, intEq);
+            for e in UnorderedMap.toList(m1) loop
+                (key1, value1) := e;
+                value2 := UnorderedMap.get(key1, m2);   // some better way than isSome()?
+                if isSome(value2) then
+                    UnorderedMap.add(key1, min(value1, Util.getOption(value2)), i);
+                end if;
+            end for;
+        end intersectionMap;
+
+        function intersectionDifference
+        "intersection + difference on multaries m1, m2 -> i, d1, d2 s.t. i U d_j = m_j, will be needed for M1(*) + M2(*) = I(*) * (d1(*) + d2(*))
+        runtime: O(m1+m2)"
+            input ENode m1, m2;
+            output ENode intersec, difference1, difference2;
+        protected
+            UnorderedMap<EClassId, Integer> args1, args2, i, d1, d2;
+            Real c1, c2, m;
+            MultaryOp mop1, mop2;
+        algorithm
+            (intersec, difference1, difference2) := match (m1, m2)
+                case (MULTARY(args1, c1, mop1), MULTARY(args2, c2, mop2)) guard hashMultaryOp(mop1) == hashMultaryOp(mop2) and c1 <> 0 and c2 <> 0 algorithm
+                    if UnorderedMap.size(args1) > UnorderedMap.size(args2) then
+                        (i, d2, d1) := intersectionDifferenceMap(args2, args1);
+                    else
+                        (i, d1, d2) := intersectionDifferenceMap(args1, args2);
+                    end if;
+                    m := min(c1, c2);
+                    then (ENode.MULTARY(i, m, mop1), ENode.MULTARY(d1, multaryMakeInvOp(mop1, c1, m), mop1), ENode.MULTARY(d2, multaryMakeInvOp(mop1, c2, m), mop1)); // Min not useful for +!! -> maybe intersection in general not useful for + (* + *) -> (U * (/ + /))
+                else fail();
+            end match;
+        end intersectionDifference;
+
+        function intersectionDifferenceMap
+        "helper for intersectionDifference: performs a intersection+difference of two integer -> integer maps
+        runtime: O(m1+m2)"
+            input UnorderedMap<EClassId, Integer> m1, m2;
+            output UnorderedMap<EClassId, Integer> i, d1, d2;
+        protected
+            EClassId key1, key2;
+            Integer value1, value2, minArg;
+            Option<Integer> valueopt;
+            Integer m;
+        algorithm
+            i := UnorderedMap.new<EClassId>(intMod, intEq);
+            d1 := UnorderedMap.new<EClassId>(intMod, intEq);
+            d2 := UnorderedMap.new<EClassId>(intMod, intEq);
+            for e in UnorderedMap.toList(m1) loop
+                (key1, value1) := e;
+                valueopt := UnorderedMap.get(key1, m2);   // some better way?
+                if isSome(valueopt) then
+                    value2 := Util.getOption(valueopt);
+                    m := min(value1, value2);
+                    UnorderedMap.add(key1, m, i);
+                    if m <> value1 then
+                        UnorderedMap.add(key1, value1 - m, d1);
+                    elseif m <> value2 then
+                        UnorderedMap.add(key1, value2 - m, d2);
+                    end if;
+                else
+                    UnorderedMap.add(key1, value1, d1);
+                end if;
+            end for;
+            for e in UnorderedMap.toList(m2) loop
+                (key2, value2) := e;
+                if isNone(UnorderedMap.get(key2, i)) then
+                    UnorderedMap.add(key2, value2, d2);
+                end if;
+            end for;
+        end intersectionDifferenceMap;
+
+        function union
+        "Union on multaries e.g. [(x,3),(y, 1)] & [(x,2),(z, -1)] -> [(x, 5), (y, 1), (z, -1)]
+        runtime: O(m1 + m2)"
+            input ENode m1, m2;
+            output ENode out;
+        protected
+            UnorderedMap<EClassId, Integer> args1, args2, unionMap;
+            Real c1, c2;
+            MultaryOp mop1, mop2;
+            UnorderedSet<Integer> S;
+            Integer value1, value2, v;
+            EClassId key1, key2;
+        algorithm
+            out := match (m1, m2)
+                case (MULTARY(args1, c1, mop1),MULTARY(args2, c2, mop2)) guard hashMultaryOp(mop1) == hashMultaryOp(mop2) algorithm
+                    S := UnorderedSet.new(intMod, intEq);
+                    unionMap := UnorderedMap.new<Integer>(intMod, intEq);
+                    for e in UnorderedMap.toList(args1) loop
+                        (key1, value1) := e;
+                        v := match UnorderedMap.get(key1, args2)
+                            case SOME(value2)
+                                then value1 + value2;
+                            else value1;
+                        end match;
+                        if v <> 0 then
+                            UnorderedMap.add(key1, v, unionMap);
+                        end if;
+                        UnorderedSet.add(key1, S);
+                    end for;
+                    for e in UnorderedMap.toList(args2) loop
+                        (key2, value2) := e;
+                        if not UnorderedSet.contains(key2, S) then
+                            UnorderedMap.add(key2, value2, unionMap);
+                        end if;
+                    end for;
+                    then ENode.MULTARY(unionMap, multaryMakeOp(mop1, c1, c2), mop1);
+                else fail();
+            end match;
+        end union;
+
         function isEqual
             input ENode node1;
             input ENode node2;
@@ -144,10 +370,14 @@ public
             isEqual := match (node1,node2)
                 local
                     Real num1,num2;
-                    EClassId id1_1,id1_2,id2_1,id2_2;
+                    EClassId id1_1,id1_2,id2_1,id2_2,id;
+                    MultaryOp mop1, mop2;
                     BinaryOp bop1, bop2;
                     UnaryOp uop1, uop2;
                     ComponentRef cref1,cref2;
+                    UnorderedMap<EClassId, Integer> args1, args2;
+                    Integer size1, size2;
+                    Boolean b;
                 case (ENode.NUM(num1),ENode.NUM(num2))
                     then num1 == num2;
                 case (ENode.SYMBOL(cref1), ENode.SYMBOL(cref2))
@@ -156,6 +386,26 @@ public
                     then id1_1 == id2_1 and id1_2 == id2_2 and compareBinaryOp(bop1, bop2);
                 case (ENode.UNARY(id1_1, uop1), ENode.UNARY(id2_1, uop2))
                     then id1_1 == id2_1 and compareUnaryOp(uop1, uop2);
+                case (ENode.MULTARY(args1, num1, mop1), ENode.MULTARY(args2, num2, mop2)) algorithm
+                    size1 := UnorderedMap.size(args1);
+                    size2 := UnorderedMap.size(args2);
+                    b := true;
+                    if ((num1 == num2 and compareMultaryOp(mop1, mop2)) and size1 == size2) then
+                        for id in UnorderedMap.keyList(args1) loop
+                            if UnorderedMap.contains(id, args2) then
+                                if UnorderedMap.getOrFail(id, args2) <> UnorderedMap.getOrFail(id, args1) then
+                                    b := false;
+                                end if;
+                            else b := false;
+                            end if;
+                            if b == false
+                                then break;
+                            end if;
+                        end for;
+                    else
+                        b := false;
+                    end if;
+                    then b;
                 else false;
             end match;
         end isEqual;
@@ -167,59 +417,64 @@ public
         algorithm
             hash := match node
                 local
+                    Integer part;
                     Real num;
-                    EClassId id1, id2;
+                    EClassId id1, id2, id;
+                    MultaryOp mop;
                     BinaryOp bop;
                     UnaryOp uop;
                     ComponentRef cref;
+                    UnorderedMap<EClassId, Integer> args;
                 case SYMBOL(cref) then ComponentRef.hash(cref, mod);
                 case NUM(num) then intMod(realInt(num), mod);
                 case BINARY(id1, id2, bop) then intMod(100 + id1 * 10 + id2 + 1000 * hashBinaryOp(bop) + 2, mod);
                 case UNARY(id1, uop) then intMod(id1 * 10 + 1000 * hashUnaryOp(uop) + 1, mod);
+                case MULTARY(args, num, mop) algorithm
+                    part := 10000;
+                    for id in UnorderedMap.keyList(args) loop
+                        part := part + UnorderedMap.getOrFail(id, args) * id * 100;
+                    end for;
+                    then intMod(part + realInt(num) + hashMultaryOp(mop), mod);
             end match;
         end hash;
 
         function children
+        "returns the list of children for a given ENode"
             input ENode node;
             output list<EClassId> childrenList;
         algorithm
             childrenList := match node
                 local
                     EClassId id1,id2;
+                    UnorderedMap<EClassId, Integer> args;
                 case (ENode.BINARY(id1,id2,_))
                     then {id1,id2};
                 case (ENode.UNARY(id1, _))
                     then {id1};
+                case (ENode.MULTARY(args, _, _))
+                    then UnorderedMap.keyList(args);
                 else
                     then {};
             end match;
         end children;
 
         function make
+        "Returns a new ENode by a list of children and a old ENode, used to rebuild the invariances
+        helper function for EGraph.canonicalize() -> only usable for non multary"
             input ENode oldEnode;
             input list<EClassId> children;
             output ENode node;
         algorithm
             node := match oldEnode
                 local
-                BinaryOp bop;
-                UnaryOp uop;
+                    BinaryOp bop;
+                    UnaryOp uop;
                 case NUM(_) then oldEnode;
                 case SYMBOL(_) then oldEnode;
-                case BINARY(_, _, bop) then BINARY(listGet(children,1),listGet(children,2), bop);
+                case BINARY(_, _, bop) then BINARY(listGet(children,1), listGet(children,2), bop);
                 case UNARY(_, uop) then UNARY(listGet(children, 1), uop);
             end match;
         end make;
-
-        function isNum
-            input ENode node;
-            output Boolean b;
-        algorithm
-            b := match node
-                case NUM(_) then false;
-                else true;
-            end match;
-        end isNum;
     end ENode;
 
     uniontype EClass
@@ -334,23 +589,6 @@ public
             end match;
         end binaryByOperator;
 
-        function unaryByOperator
-            input NFExpression exp;
-            input NFOperator op;
-            input output EGraph graph;
-            output EClassId id;
-        algorithm
-            (graph, id) :=  match op.op
-            local
-                EClassId tmpId;
-                EGraph tmpGraph = graph;
-                case Op.UMINUS algorithm
-                    (tmpGraph, tmpId) := newFromExp(exp, graph);
-                    then EGraph.add(ENode.UNARY(tmpId, UnaryOp.UMINUS), tmpGraph);
-                else fail();
-            end match;
-        end unaryByOperator;
-
         function multaryByOperator
             input list<NFExpression> arguments, inv_arguments;
             input NFOperator op;
@@ -358,45 +596,63 @@ public
             output EClassId id;
         protected
             NFExpression arg, inv_arg;
-            EClassId idNew, idNewTemp;
-            BinaryOp chainOp;
-            UnaryOp invOp;
+            EClassId tmpId;
+            Integer tmpVal;
+            Real const;
+            MultaryOp mop;
+            UnorderedMap<EClassId, Integer> args;
+            //EGraph tmpGraph = graph;
         algorithm
-            (chainOp, invOp) := match op.op
-                case Op.ADD then (BinaryOp.ADD, UnaryOp.UMINUS);
-                case Op.MUL then (BinaryOp.MUL, UnaryOp.UDIV);
+            (mop, const) := match op.op
+                case Op.ADD then (MultaryOp.ADD, 0.0);
+                case Op.MUL then (MultaryOp.MUL, 1.0);
                 else fail();
             end match;
-            if listLength(arguments) == 0 and listLength(inv_arguments) == 0 then
-                (graph, id) := EGraph.add(neutralElementBinaryOp(chainOp), graph);
-            elseif listLength(arguments) == 1 and listLength(inv_arguments) == 0 then
-                (graph, id) := newFromExp(listGet(arguments, 1), graph);
-            elseif listLength(arguments) == 0 and listLength(inv_arguments) == 1 then
-                (graph, id) := newFromExp(listGet(inv_arguments, 1), graph);
-            else
-                id := -1;
-                for arg in arguments loop
-                    (graph, idNew) :=  newFromExp(arg, graph);
-                    if id == -1 then
-                        id := idNew;
-                    else
-                        (graph, id) := EGraph.add(ENode.BINARY(id, idNew, chainOp), graph);
-                    end if;
-                end for;
-                for inv_arg in inv_arguments loop
-                    (graph, idNewTemp) := newFromExp(inv_arg, graph);
-                    (graph, idNew) := EGraph.add(ENode.UNARY(idNewTemp, invOp), graph);
-                    if id == -1 then
-                        id := idNew;
-                    else
-                        (graph, id) := EGraph.add(ENode.BINARY(id, idNew, chainOp), graph);
-                    end if;
-                end for;
-            end if;
+            args := UnorderedMap.new<EClassId>(intMod, intEq);
+            for arg in arguments loop
+                if NFExpression.isConstNumber(arg) then
+                    const := addmulReal(const, arg, mop, false);
+                else
+                    (graph, tmpId) := newFromExp(arg, graph);
+                    UnorderedMap.addUpdate(tmpId, optInc, args);
+                end if;
+            end for;
+            for inv_arg in inv_arguments loop
+                if NFExpression.isConstNumber(arg) then
+                    const := addmulReal(const, arg, mop, true);
+                else
+                    (graph, tmpId) := newFromExp(arg, graph);
+                    UnorderedMap.addUpdate(tmpId, optDec, args);
+                end if;
+            end for;
+            for elem in UnorderedMap.toList(args) loop
+                (tmpId, tmpVal) := elem;
+                if tmpVal == 0 then
+                    UnorderedMap.remove(tmpId, args); // potentially high runtime due to O(n) for every remove
+                end if;
+            end for;
+            (graph, id) := EGraph.add(ENode.MULTARY(args, 0, mop), graph);
         end multaryByOperator;
 
+        function unaryByOperator
+            input NFExpression exp;
+            input NFOperator op;
+            input output EGraph graph;
+            output EClassId id;
+        algorithm
+            (graph, id) :=  match op.op
+                local
+                    EClassId tmpId;
+                    EGraph tmpGraph = graph;
+                case Op.UMINUS algorithm
+                    (tmpGraph, tmpId) := newFromExp(exp, graph);
+                    then EGraph.add(ENode.UNARY(tmpId, UnaryOp.UMINUS), tmpGraph);
+                else fail();
+            end match;
+        end unaryByOperator;
 
         function newFromExp
+        "extends the EGraph with a new NFExp, if the expression is nested the function will be called multiple times"
             input NFExpression exp;
             input output EGraph graph = EGraph.new();
             output EClassId id;
@@ -428,6 +684,74 @@ public
             end match;
         end newFromExp;
 
+        function addmulReal
+        "helper for multaryByOperator"
+        input output Real const;
+        input NFExpression arg;
+        input MultaryOp mop;
+        input Boolean inverted; // True - and /, False + and *
+        protected
+            Real c;
+        algorithm
+            (c, _) := getConst(arg, true);
+            const := match (mop, inverted)
+                case (MultaryOp.ADD, false) then const + c;
+                case (MultaryOp.MUL, false) then const * c;
+                case (MultaryOp.ADD, true) then const - c;
+                case (MultaryOp.MUL, true) then const / c;
+            end match;
+        end addmulReal;
+
+        function getConst
+        "cheap copy of NFSymplifyExp.getConstantValue() since its a protected function"
+        input NFExpression exp "REAL(), INTEGER(), CAST(), UNARY()";
+        output Real value;
+        input output Boolean anyReal;
+        algorithm
+        (value, anyReal) := match exp
+            local
+            Real r;
+            Integer i;
+            Boolean b;
+            case NFExpression.REAL(value = r)    then (r, true);
+            case NFExpression.INTEGER(value = i) then (intReal(i), anyReal);
+            case NFExpression.CAST() algorithm
+            (r, b) := getConst(exp.exp, anyReal);
+            // negate b because it has been cast
+            then (r, anyReal or (not b));
+            case NFExpression.UNARY(operator = Operator.OPERATOR(op = NFOperator.Op.UMINUS)) algorithm
+            (r, b) := getConst(exp.exp, anyReal);
+            // negate r because it has a minus sign
+            then (-r, anyReal or b);
+            else fail();
+        end match;
+        end getConst;
+
+        function optInc
+        "helper for multaryByOperator"
+            input Option<Integer> oldValue;
+            output Integer value;
+        algorithm
+            value := match oldValue
+                local
+                Integer i;
+                case SOME(i) then i+1;
+                else 1;
+            end match;
+        end optInc;
+
+        function optDec
+        "helper for multaryByOperator"
+            input Option<Integer> oldValue;
+            output Integer value;
+        algorithm
+            value := match oldValue
+                local
+                Integer i;
+                case SOME(i) then i-1;
+                else -1;
+            end match;
+        end optDec;
 
         function add
             "Adds an Enode to the EGraph. If the node is already in the EGraph, returns the Enodes id,
@@ -514,14 +838,26 @@ public
         end union;
 
         function canonicalize
-            "new children of an enode will become the root elements of the old children"
+            "canonicalizes all children of an enode"
             input EGraph graph;
             input output ENode node;
-        protected
-            list<EClassId> new_ch;
         algorithm
-            new_ch := list(EGraph.find(graph, id) for id in ENode.children(node));
-            node := ENode.make(node, new_ch);
+            node := match node
+                local
+                    UnorderedMap<EClassId, Integer> args, newargs;
+                    Real const;
+                    MultaryOp mop;
+                    list<EClassId> new_ch;
+                case MULTARY(args, const, mop) algorithm
+                    newargs := UnorderedMap.new<EClassId>(intMod, intEq);
+                    for id in UnorderedMap.keyList(args) loop
+                        UnorderedMap.add(EGraph.find(graph, id), UnorderedMap.getOrFail(id, args), newargs);
+                    end for;
+                    then ENode.MULTARY(newargs, const, mop);
+                else algorithm
+                    new_ch := list(EGraph.find(graph, childid) for childid in ENode.children(node));
+                    then ENode.make(node, new_ch);
+            end match;
         end canonicalize;
 
         function rebuild
@@ -542,23 +878,23 @@ public
             input EClassId eclassid;
             input output EGraph graph;
         protected
-            EClass elem;
+            EClass class1;
             ENode node;
             EClassId id;
             UnorderedMap<ENode,EClassId> new_parents;
         algorithm
-            //elem := UnorderedMap.getSafe(EGraph.find(graph, eclassid), graph.eclasses);
-            elem := UnorderedMap.getSafe(eclassid, graph.eclasses);
-            for tup in elem.parents loop
+            //class1 := UnorderedMap.getSafe(EGraph.find(graph, eclassid), graph.eclasses);
+            class1 := UnorderedMap.getSafe(eclassid, graph.eclasses);
+            for tup in class1.parents loop
                 (node, id) := tup;
                 UnorderedMap.remove(node, graph.hashcons);
                 node := EGraph.canonicalize(graph, node);
                 UnorderedMap.add(node, EGraph.find(graph, id), graph.hashcons);
             end for;
             new_parents := UnorderedMap.new<EClassId>(ENode.hash, ENode.isEqual);
-            //elem := UnorderedMap.getSafe(EGraph.find(graph, eclassid), graph.eclasses);
-            elem := UnorderedMap.getSafe(eclassid, graph.eclasses);
-            for tup in elem.parents loop
+            //class1 := UnorderedMap.getSafe(EGraph.find(graph, eclassid), graph.eclasses);
+            class1 := UnorderedMap.getSafe(eclassid, graph.eclasses);
+            for tup in class1.parents loop
                 (node, id) := tup;
                 node := EGraph.canonicalize(graph, node);
                 if UnorderedMap.contains(node, new_parents) then
@@ -566,14 +902,14 @@ public
                 end if;
                 UnorderedMap.add(node, EGraph.find(graph, id), new_parents);
             end for;
-            elem.parents := UnorderedMap.toList(new_parents);
-            UnorderedMap.add(eclassid,elem,graph.eclasses);
+            class1.parents := UnorderedMap.toList(new_parents);
+            UnorderedMap.add(eclassid,class1,graph.eclasses);
         end repair;
 
         function getNum
-            "Checks if a enode is actually a constant expression and returns Option of that value
-            - core element of the analysis (combining constants when enodes/classes
-            are added or when two classes get unioned)"
+            "Checks if an enode is actually a constant expression and returns Option of that value
+            - core element of the analysis (combining constants if enodes/classes
+            are added or if two classes get unioned)"
             input EGraph egraph;
             input ENode node;
             output Option<Real> num;
@@ -619,7 +955,7 @@ public
         end getNum;
 
         function printAll
-        "function to print all expressions of the egraph"
+        "printing all deduced expressions of the EGraph"
             input EClassId id;
             input EGraph egraph;
         protected
@@ -627,13 +963,15 @@ public
         algorithm
             allstrings := allExpressions(id, egraph);
             print("All expressions:\n");
-            print("size: " + intString(listLength(allstrings)) + "\n");
+            print("Expression count: " + intString(listLength(allstrings)) + "\n");
             for tempString in allstrings loop
                 print(tempString  + "\n");
             end for;
+            print("\n");
         end printAll;
 
         function allExpressions
+        "returns a list of strings with all deduced expressions"
             input EClassId id;
             input EGraph egraph;
             output list<String> allstrings;
@@ -738,7 +1076,6 @@ public
                     end for;
                     UnorderedMap.add(temp_id, best, extractor.dist);
                     UnorderedMap.add(temp_id, best_node, extractor.best_nodes);
-
                     then (best,extractor);
                 end match;
         end extract;
@@ -751,7 +1088,7 @@ public
             EClassId temp_start;
             ENode node;
         algorithm
-            temp_start := EGraph.find(extractor.egraph,start);
+            temp_start := EGraph.find(extractor.egraph, start);
             node := UnorderedMap.getOrFail(temp_start,extractor.best_nodes);
             exp := match node
                 local
@@ -886,32 +1223,6 @@ public
             end if;
         end fromStringHelper;
 
-        function hash
-            input Pattern p;
-            input Integer mod;
-            output Integer out;
-        algorithm
-            out := match p
-                local
-                    Integer varId;
-                    Real num;
-                    BinaryOp bop;
-                    UnaryOp uop;
-                    Pattern temp_pattern1,temp_pattern2;
-                    String str;
-                case Pattern.VAR(varId)
-                    then 17*varId + 1000;
-                case Pattern.NUM(num)
-                    then 13*(realInt(num) + 7);
-                case Pattern.SYMBOL(str)
-                    then stringHashDjb2Mod(str, mod);
-                case Pattern.BINARY(temp_pattern1, temp_pattern2, bop)
-                    then hash(temp_pattern1, mod) + hash(temp_pattern2, mod) + NFEGraph.hashBinaryOp(bop);
-                case Pattern.UNARY(temp_pattern1, uop)
-                    then hash(temp_pattern1, mod) + NFEGraph.hashUnaryOp(uop);
-            end match;
-        end hash;
-
         function matchPattern
             input EClassId id;
             input EGraph egraph;
@@ -932,7 +1243,7 @@ public
                 for map in subs_in loop
                     node_list := UnorderedMap.copy(map) :: node_list;
                 end for;
-                node_list :=  match (pattern, node)
+                node_list := match (pattern, node)
                     local
                         Integer varId;
                         Real num1, num2;
@@ -973,7 +1284,7 @@ public
                         guard(uop1 == uop2) then matchPattern(temp_id1,egraph,temp_pattern1,node_list);
                     else {};
                 end match;
-                subs_out := listAppend(node_list,subs_out);
+                subs_out := listAppend(node_list, subs_out);
             end for;
         end matchPattern;
 
@@ -1020,14 +1331,6 @@ public
             Pattern pattern_in, pattern_out;
             String name;
         end RULE;
-
-        function hash
-            input Rule rule;
-            input Integer mod;
-            output Integer out;
-        algorithm
-            out :=  intMod(Pattern.hash(rule.pattern_in, mod) + 10*Pattern.hash(rule.pattern_out, mod) + 1, mod);
-        end hash;
 
         function fromString
             "rule parser: e.g. '(+ ?a 0)', '?a' <=> a + 0 = a"
@@ -1098,9 +1401,9 @@ public
                 for map in subs_part loop
                     (egraph, newId) := Pattern.apply(rule.pattern_out, map, egraph);
                     (egraph, changed) := EGraph.union(exId, newId, egraph);
-                    if changed then
-                      //print("apply rule name: " + rule.name + "\n");
-                    end if;
+                    /*if changed then
+                        print("apply rule name: " + rule.name + "\n");
+                    end if;*/
                     saturated := saturated and (not changed);
                 end for;
             end for;
