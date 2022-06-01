@@ -322,6 +322,62 @@ public
             end for;
         end intersectionDifferenceMap;
 
+        function unionList
+        "naive O(m_1 + m_2 + ... + m_k)"
+            input list<ENode> nodeList;
+            output ENode out;
+        protected
+            UnorderedMap<EClassId, Integer> args, unionMap;
+            Real const, c;
+            MultaryOp mop;
+            Integer value, v, oldValue, newValue;
+            EClassId key;
+            ENode tmpNode;
+        algorithm
+            unionMap := UnorderedMap.new<Integer>(intMod, intEq);
+            tmpNode := List.first(nodeList); // make sure nodeList != {}, but the whole function wouldnt make any sense
+            mop := match tmpNode
+                local
+                    MultaryOp tmop;
+                case ENode.MULTARY(_, _, tmop)
+                    then tmop;
+                else
+                    then fail();
+            end match;
+            const := match mop
+                case MultaryOp.ADD then 0;
+                case MultaryOp.MUL then 1;
+                else then fail();
+            end match;
+            for node in nodeList loop
+                (args, c) := match node
+                    local
+                        UnorderedMap<EClassId, Integer> targ;
+                        Real tc;
+                    case ENode.MULTARY(targ, tc, _) then (targ, tc);
+                    else then fail();
+                end match;
+                const := multaryMakeOp(mop, const, c);
+                for elem in UnorderedMap.toList(args) loop
+                    (key, value) := elem;
+                    if UnorderedMap.contains(key, unionMap) then
+                        oldValue := UnorderedMap.getOrFail(key, unionMap);
+                        UnorderedMap.add(key, value + oldValue, unionMap);
+                    else
+                        UnorderedMap.add(key, value, unionMap);
+                    end if;
+                end for;
+            end for;
+            for elem in UnorderedMap.toList(unionMap) loop
+                (key, value) := elem;
+                if value == 0 then
+                    UnorderedMap.remove(key, unionMap);
+                end if;
+            end for;
+            out := ENode.MULTARY(unionMap, const, mop);
+        end unionList;
+
+
         function union
         "Union on multaries e.g. [(x,3),(y, 1)] & [(x,2),(z, -1)] -> [(x, 5), (y, 1), (z, -1)]
         runtime: O(m1 + m2)"
