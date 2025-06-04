@@ -33,12 +33,12 @@
 
 #include "../OptimizerData.h"
 #include "../OptimizerLocalFunction.h"
-
+#include "../OPT_TIMING.h"
 
 /* eval object function
  */
 Bool evalfF(Index n, Number * vopt, Bool new_x, Number *objValue, void * useData){
-
+  double start = ipopt_begin_timing();
   OptData *optData = (OptData*)useData;
 
   const modelica_boolean la = optData->s.lagrange;
@@ -85,7 +85,7 @@ Bool evalfF(Index n, Number * vopt, Bool new_x, Number *objValue, void * useData
   }
 
   *objValue = (Number)(lagrange + mayer);
-
+  ipopt_end_timing(start,  &ipopt_eval_f_time);
   return TRUE;
 }
 
@@ -95,6 +95,7 @@ Bool evalfF(Index n, Number * vopt, Bool new_x, Number *objValue, void * useData
  *  author: Vitalij Ruge
  **/
 Bool evalfDiffF(Index n, double * vopt, Bool new_x, Number *gradF, void * useData){
+  double start = ipopt_begin_timing();
   OptData *optData = (OptData*)useData;
 
   const int nv = optData->dim.nv;
@@ -142,6 +143,6 @@ Bool evalfDiffF(Index n, double * vopt, Bool new_x, Number *gradF, void * useDat
     }
 
   }
-
+  ipopt_end_timing(start, &ipopt_eval_grad_f_time);
   return TRUE;
 }

@@ -217,10 +217,12 @@ ifeq ($(OMC_MINIMAL_RUNTIME),)
                     eval_all/EvalF$(OBJ_EXT) \
                     eval_all/EvalG$(OBJ_EXT) \
                     eval_all/EvalL$(OBJ_EXT) \
-                    optimizer_main$(OBJ_EXT)
+                    optimizer_main$(OBJ_EXT) \
+                    OPT_TIMING$(OBJ_EXT)
   OPTIMIZATION_HFILES=OptimizerData.h \
                       OptimizerInterface.h \
-                      OptimizerLocalFunction.h
+                      OptimizerLocalFunction.h \
+                      OPT_TIMING.h
 else
   OPTIMIZATION_OBJS=
   OPTIMIZATION_HFILES=

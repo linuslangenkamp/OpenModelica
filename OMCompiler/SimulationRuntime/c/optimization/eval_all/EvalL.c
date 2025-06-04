@@ -34,7 +34,7 @@
 #include "../OptimizerData.h"
 #include "../OptimizerLocalFunction.h"
 #include "../../simulation/solver/model_help.h"
-
+#include "../OPT_TIMING.h"
 static inline void calculate_hessian_matrix_numerical(double * v, const double * const lambda, const double objFactor , OptData *optData, const int i, const int j);
 static inline void calculate_weighted_sum_with_lagrange_multiplicator_from_tensor(const int i, const int j, double * res,  const modelica_boolean upC, OptData *optData);
 static inline void calculate_hessian_matrix_numerical_last_time_intervall(double * v, const double * const lambda, const double objFactor, OptData *optData, const int i, const int j);
@@ -138,7 +138,7 @@ static void fill_hessian_values(double *vopt, double *lambda, double obj_factor,
  */
 Bool ipopt_h(int n, double *vopt, Bool new_x, double obj_factor, int m, double *lambda, Bool new_lambda,
                     int nele_hess, int *iRow, int *iCol, double *values, void* useData){
-
+double start = ipopt_begin_timing();
   OptData *optData = (OptData*)useData;
   modelica_boolean keepH = optData->dim.updateHessian > optData->dim.iter_updateHessian++;
 
@@ -154,7 +154,7 @@ Bool ipopt_h(int n, double *vopt, Bool new_x, double obj_factor, int m, double *
       memcpy(optData->oldH, values, nele_hess*sizeof(double));
   }
 
-
+    ipopt_end_timing(start, &ipopt_eval_hessian_time);
   return TRUE;
 }
 

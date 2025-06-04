@@ -35,7 +35,7 @@
 #include "../OptimizerLocalFunction.h"
 #include "../../simulation/results/simulation_result.h"
 #include "../../simulation/options.h"
-
+#include "../OPT_TIMING.h"
 static inline void generated_jac_struc(OptData *, int*, int*);
 static inline void set_row(int *, int *, int *, const modelica_boolean *const,
     const int, const int , const int );
@@ -70,6 +70,8 @@ static inline void printMaxError(Number *g, const int m, const int nx, const int
 /* eval constraints
  */
 Bool evalfG(Index n, double * vopt, Bool new_x, int m, Number *g, void * useData){
+  double start = ipopt_begin_timing();
+
   OptData *optData = (OptData*)useData;
 
   const int nx = optData->dim.nx;
@@ -153,6 +155,7 @@ Bool evalfG(Index n, double * vopt, Bool new_x, int m, Number *g, void * useData
     const int nJ = optData->dim.nJ;
     printMaxError(g, m, nx, nJ, optData->time.t, np ,nsi ,optData->data, optData);
   }
+    ipopt_end_timing(start, &ipopt_eval_g_time);
   return TRUE;
 }
 
@@ -161,6 +164,7 @@ Bool evalfG(Index n, double * vopt, Bool new_x, int m, Number *g, void * useData
  *  author: Vitalij Ruge
  **/
 Bool evalfDiffG(Index n, double * vopt, Bool new_x, Index m, Index njac, Index *iRow, Index *iCol, Number *values, void * useData){
+  double start = ipopt_begin_timing();
   OptData *optData = (OptData*)useData;
 
   if(!values){
@@ -326,7 +330,7 @@ Bool evalfDiffG(Index n, double * vopt, Bool new_x, Index m, Index njac, Index *
     }
    }
   }
-
+  ipopt_end_timing(start, &ipopt_eval_jac_g_time);
   return TRUE;
 }
 

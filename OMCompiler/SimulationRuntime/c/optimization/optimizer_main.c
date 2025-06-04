@@ -36,6 +36,23 @@
 #include "OptimizerLocalFunction.h"
 #include "simulation_data.h"
 #include "simulation/options.h"
+#include "OPT_TIMING.h"
+
+double ipopt_time = 0.0;
+double ipopt_eval_f_time = 0.0;
+double ipopt_eval_grad_f_time = 0.0;
+double ipopt_eval_g_time = 0.0;
+double ipopt_eval_jac_g_time = 0.0;
+double ipopt_eval_hessian_time = 0.0;
+
+
+#include <sys/time.h>  // For gettimeofday()
+#include "OPT_TIMING.h"
+double get_wall_time() {
+    struct timeval time;
+    gettimeofday(&time, NULL);
+    return (double)time.tv_sec + (double)time.tv_usec * 1e-6;
+}
 
 static inline int optimizationWithIpopt(OptData*optData);
 static inline void freeOptimizerData(OptData*optData);
@@ -51,8 +68,10 @@ int runOptimizer(DATA* data, threadData_t *threadData, SOLVER_INFO* solverInfo){
 
   initial_guess_optimizer(optData, solverInfo);
   allocate_der_struct(&optData->s, &optData->dim ,data, optData);
-
+  double t = get_wall_time();
   const int res = optimizationWithIpopt(optData);
+  ipopt_end_timing(t, &ipopt_time);
+  print_ipopt_callback_times();
   res2file(optData, solverInfo, optData->ipop.vopt);
   freeOptimizerData(optData);
   if(res == 0 /*Solve_Succeeded*/ || res == 1 /*Solved_To_Acceptable_Level*/)
