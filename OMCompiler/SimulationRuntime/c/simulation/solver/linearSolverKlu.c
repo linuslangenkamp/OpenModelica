@@ -105,7 +105,31 @@ int freeKluData(void **voiddata)
   return 0;
 }
 
-/*! \fn getAnalyticalJacobian
+// TODO: get rid of all setSparsePattern functions, only set it initially, where the setAElement fn ptrs are set?!
+
+/*! \fn setSparsePattern
+ *
+ * sets sparse pattern in KLU solver from jacobian sparse pattern
+ */
+static void setSparsePattern(JACOBIAN* jacobian, DATA_KLU* sData) {
+  int row, col, nz;
+
+  const SPARSE_PATTERN* sp = jacobian->sparsePattern;
+  for (col = 0; col < jacobian->sizeCols; col++) {
+    for (nz = sp->leadindex[col]; nz < sp->leadindex[col+1]; nz++) {
+      row = sp->index[nz];
+
+      if (col > 0) {
+        if (sData->Ap[col] == 0) {
+          sData->Ap[col] = nz;
+        }
+      }
+      sData->Ai[nz] = row;
+    }
+  }
+}
+
+/*! \fn getNegatedAnalyticalJacobian
  *
  *  function calculates analytical jacobian
  *
@@ -115,39 +139,19 @@ int freeKluData(void **voiddata)
  *  \author wbraun
  *
  */
-static void getAnalyticalJacobian(DATA* data, threadData_t *threadData,
-                                 LINEAR_SYSTEM_DATA* systemData)
+static void getNegatedAnalyticalJacobian(DATA* data, threadData_t *threadData, LINEAR_SYSTEM_DATA* systemData)
 {
-  int i,j,l,nth;
+  int nz;
   JACOBIAN* jacobian = systemData->parDynamicData[omc_get_thread_num()].jacobian;
   JACOBIAN* parentJacobian = systemData->parDynamicData[omc_get_thread_num()].parentJacobian;
-  const SPARSE_PATTERN* sp = jacobian->sparsePattern;
+  DATA_KLU* sData = (DATA_KLU*) systemData->parDynamicData[omc_get_thread_num()].solverData[0];
 
-  /* evaluate constant equations of Jacobian */
-  if (jacobian->constantEqns != NULL) {
-    jacobian->constantEqns(data, threadData, jacobian, parentJacobian);
-  }
+  evalJacobian(data, threadData, jacobian, parentJacobian, sData->Ax, FALSE);
+  setSparsePattern(jacobian, sData);
 
-  /* evaluate Jacobian */
-  for (i = 0; i < sp->maxColors; i++) {
-    /* activate seed variable for the corresponding color */
-    for (j = 0; j < jacobian->sizeCols; j++)
-      if (sp->colorCols[j]-1 == i)
-        jacobian->seedVars[j] = 1.0;
-
-    /* Evaluate Jacobian column */
-    jacobian->evalColumn(data, threadData, jacobian, parentJacobian);
-
-    for (j = 0; j < jacobian->sizeCols; j++) {
-      if (sp->colorCols[j]-1 == i) {
-        for (nth = sp->leadindex[j]; nth < sp->leadindex[j+1]; nth++) {
-          l = sp->index[nth];
-          systemData->setAElement(j, l, -jacobian->resultVars[l], nth, systemData, threadData);
-        }
-        /* de-activate seed variable for the corresponding color */
-        jacobian->seedVars[j] = 0.0;
-      }
-    }
+  // negate the Jacobian entries for KLU
+  for (nz = 0; nz < jacobian->sparsePattern->numberOfNonZeros; nz++) {
+    sData->Ax[nz] *= -1.0;
   }
 }
 
@@ -202,7 +206,7 @@ int solveKlu(DATA *data, threadData_t *threadData, int sysNumber, double* aux_x)
       solverData->Ap[0] = 0;
       /* calculate jacobian -> matrix A*/
       if(systemData->jacobianIndex != -1){
-        getAnalyticalJacobian(data, threadData, systemData);
+        getNegatedAnalyticalJacobian(data, threadData, systemData);
       } else {
         assertStreamPrint(threadData, 1, "jacobian function pointer is invalid" );
       }

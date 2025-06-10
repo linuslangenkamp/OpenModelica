@@ -38,6 +38,7 @@
 #define _LINEARSOLVERKLU_H_
 
 #include "../../simulation_data.h"
+#include "../jacobian_util.h"
 #include <amd.h>
 #include <klu.h>
 
