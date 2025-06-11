@@ -90,6 +90,7 @@ protected
   import Inline = NBInline;
   import NBJacobian.JacobianType;
   import Module = NBModule;
+  import Optimization = NBOptimization;
   import Resizable = NBResizable;
   import Solve = NBSolve;
   import Tearing = NBTearing;
@@ -300,6 +301,10 @@ public
 
     if Flags.getConfigBool(Flags.DAE_MODE) then
       mainModules := (DAEMode.main, "DAE-Mode") :: mainModules;
+    end if;
+
+    if Flags.getConfigBool(Flags.DYNAMIC_OPTIMIZATION) then
+      mainModules := (Optimization.main, "Dynamic Optimization") :: mainModules;
     end if;
 
     // (do not change order SOLVE -> JACOBIAN)

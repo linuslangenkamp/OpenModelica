@@ -418,7 +418,8 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.MAX_SIZE_LINEARIZATION,
   Flags.RESIZABLE_ARRAYS,
   Flags.EVALUATE_STRUCTURAL_PARAMETERS,
-  Flags.LOAD_MISSING_LIBRARIES
+  Flags.LOAD_MISSING_LIBRARIES,
+  Flags.DYNAMIC_OPTIMIZATION
 };
 
 public function new

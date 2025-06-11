@@ -49,6 +49,7 @@ encapsulated package NBModule
    - partitioningInterface
    - causalizeInterface
    - daeModeInterface
+   - optimizationInterface
 
   *** POST (Mandatory)
    - jacobianInterface
@@ -154,6 +155,15 @@ public
      This function is only allowed to create a list of new partitions for dae Mode."
     input output list<Partition.Partition> partitions;
   end daeModeInterface;
+
+//                            OPTIMIZATION
+// *************************************************************************
+  partial function optimizationInterface
+    "Optimization
+     TODO: add doc"
+    input output VarData varData         "Data containing variable pointers";
+    input output EqData eqData           "Data containing equation pointers";
+  end optimizationInterface;
 
 // =========================================================================
 //                         MANDATORY PRE-OPT MODULES

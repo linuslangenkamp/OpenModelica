@@ -287,6 +287,7 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBDAEMode.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBInitialization.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBMatching.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBOptimization.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBPartitioning.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBResolveSingularities.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/1_Main/NBSorting.mo
