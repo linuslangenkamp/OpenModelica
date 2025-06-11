@@ -55,6 +55,7 @@
  */
 
 #include "newton_diagnostics.h"
+#include "jacobian_svd.h"
 #include "../simulation_info_json.h"
 #include "../jacobian_util.h"
 
@@ -142,6 +143,9 @@ double** getJacobian( DATA* data, threadData_t *threadData, NONLINEAR_SYSTEM_DAT
     for (i = 0; i < jacobian->sizeRows; ++i)
       for (j = 0; j < jacobian->sizeCols; ++j)
         fx[i][j] = jac[j*jacobian->sizeRows + i];
+
+    omc_useStream[OMC_LOG_NLS_SVD] = 1;
+    svd_compute(jacobian->sparsePattern, jac, jacobian->sizeRows, jacobian->sizeCols);
 
     free(jac);
 

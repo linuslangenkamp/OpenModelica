@@ -98,6 +98,7 @@ const char *OMC_LOG_STREAM_NAME[OMC_SIM_LOG_MAX] = {
   "LOG_STATS_V",
   "LOG_SUCCESS",
   "LOG_SYNCHRONOUS",
+  "LOG_NLS_SVD",
 #ifdef USE_DEBUG_TRACE
   "LOG_TRACE",
 #endif
@@ -157,6 +158,7 @@ const char *OMC_LOG_STREAM_DESC[OMC_SIM_LOG_MAX] = {
   "additional statistics for OMC_LOG_STATS",                                    /* OMC_LOG_STATS_V */
   "this stream is always active, unless deactivated with -lv=-LOG_SUCCESS",     /* OMC_LOG_SUCCESS */
   "log clocks and sub-clocks for synchronous features",                         /* OMC_LOG_SYNCHRONOUS */
+  "perform SVD statistics on Jacobian in newton diagnositics",                  /* OMC_LOG_NLS_SVD */
 #ifdef USE_DEBUG_TRACE
   "enables additional output to trace call stack",                              /* OMC_LOG_TRACE */
 #endif
