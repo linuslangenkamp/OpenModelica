@@ -1384,7 +1384,10 @@ constant ConfigFlag CAUSALIZE_DAE_MODE = CONFIG_FLAG(160, "causalizeDaeMode",
 /* please remove me once this is supported */
 constant ConfigFlag SIM_CODE_SCALARIZE = CONFIG_FLAG(161, "simCodeScalarize",
   NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
-  Gettext.gettext("Sclarizes variables during simcode phase."));
+  Gettext.gettext("Scalarizes variables during simcode phase."));
+constant ConfigFlag MOO_DYNAMIC_OPTIMIZATION = CONFIG_FLAG(162, "moo",
+  NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
+  Gettext.gettext("Generate code for dynamic optimization library MOO."));
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."
