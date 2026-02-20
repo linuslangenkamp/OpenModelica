@@ -599,7 +599,7 @@ int full_implicit_RK(DATA* data, threadData_t* threadData, SOLVER_INFO* solverIn
                                          && gbData->nlsSolverMethod == GB_NLS_INTERNAL);
 
   // calculate yt(t_n+1) by contractive or standard embedded error estimate
-  if (use_contractive_error)
+  if (!gbData->eventHappened)
   {
     gbInternalContraction(data, threadData, gbData->nlsData, gbData, gbData->y, gbData->yt);
   }
