@@ -1400,6 +1400,89 @@ NLS_SOLVER_STATUS gbInternalSolveNls(DATA *data,
 extern void gb_interpolation(enum GB_INTERPOL_METHOD interpolMethod, double ta, double* fa, double* dfa, double tb, double* fb, double* dfb, double t, double* f,
                              int nIdx, int* idx, int nStates, BUTCHER_TABLEAU* tableau, double* x, double *k);
 
+void gbTwoStepFactorsRadauIIA3(double r, double *delta, double *beta)
+{
+  double r2 = r * r;
+  double r3 = r2 * r;
+  double r4 = r2 * r2;
+  double sq6 = sqrt(6.0);
+
+  delta[0] = (1.0/2.0)*r2*(-20*r3 - 5*sq6*r3 - 45*sq6*r2 + 45*r2 - 63*sq6*r + 108*r - 27*sq6 + 57)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+  delta[1] = (1.0/2.0)*r2*(-20*r3 + 5*sq6*r3 + 45*r2 + 45*sq6*r2 + 108*r + 63*sq6*r + 57 + 27*sq6)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+  delta[2] = r2*(20*r3 - 45*r2 - 108*r - 57)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+
+  beta[0] = (1.0/2.0)*(-70*sq6*r4 - 130*r4 - 176*sq6*r3 - 184*r3 - 171*sq6*r2 - 39*r2 - 78*sq6*r + 48*r - 15*sq6 + 15)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+  beta[1] = (1.0/2.0)*(-130*r4 + 70*sq6*r4 - 184*r3 + 176*sq6*r3 - 39*r2 + 171*sq6*r2 + 48*r + 78*sq6*r + 15 + 15*sq6)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+  beta[2] = 0.0;
+}
+
+void gbTwoStepBarFactors(BUTCHER_TABLEAU *tableau, const double *delta, const double *beta, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  const double *A = tableau->A;
+  int nStages = (int) tableau->nStages;
+
+  for (int i = 0; i < nStages; i++)
+  {
+    delta_bar[i] = 0;
+    beta_bar[i]  = 0;
+  }
+
+  for (int i = 0; i < nStages; i++)
+  {
+    for (int j = 0; j < nStages; j++)
+    {
+      delta_bar[j] += delta[i] * A[i * nStages + j];
+      beta_bar[j]  += beta[i] * A[i * nStages + j];
+    }
+  }
+
+  for (int i = 0; i < nStages; i++)
+  {
+    delta_bar[i] *= h_prev;
+    beta_bar[i] *= h;
+  }
+}
+
+void gbTwoStepError(DATA *data,
+                      threadData_t *threadData,
+                      NONLINEAR_SYSTEM_DATA *nonlinsys,
+                      DATA_GBODE *gbData,
+                      const double *y,
+                      double *yt)
+{
+  GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
+  CONTRACTIVE_DEFECT_ERROR *defect_err = gbData->tableau->t_transform->defect_err;
+
+  int nStates = gbData->nStates;
+  int nStages = (int)gbData->tableau->nStages;
+
+  double h_prev = gbData->extrapolationStepSize;
+  double h = gbData->stepSize;
+  double r = h / h_prev;
+
+  double delta[MAX_GBODE_FIRK_STAGES], beta[MAX_GBODE_FIRK_STAGES];
+  double delta_bar[MAX_GBODE_FIRK_STAGES], beta_bar[MAX_GBODE_FIRK_STAGES];
+
+  gbTwoStepFactorsRadauIIA3(r, delta, beta);
+  gbTwoStepBarFactors(gbData->tableau, delta, beta, h, h_prev, delta_bar, beta_bar);
+
+  memset(yt, 0, nStates * sizeof(double));
+  for (int i = 0; i < nStages; i++)
+  {
+    daxpy_(&nStates, &delta_bar[i], &gbData->kLast[nStates * i], &INT_ONE, yt, &INT_ONE);
+    daxpy_(&nStates, &beta_bar[i], &gbData->k[nStates * i], &INT_ONE, yt, &INT_ONE);
+  }
+
+  daxpy_(&nStates, &DBL_ONE, gbData->yOld, &INT_ONE, yt, &INT_ONE);
+
+  // do some a (in paper) or fac (in GBODE) scaling of the error term
+  // we will subtract y (solution of main method), multiply by factor "a" and then subtract y again
+  double a = 0.1; // another calibration factor
+  daxpy_(&nStates, &DBL_MINUS_ONE, y, &INT_ONE, yt, &INT_ONE);
+  dscal_(&nStates, &a, yt, &INT_ONE);
+  daxpy_(&nStates, &DBL_ONE, y, &INT_ONE, yt, &INT_ONE);
+}
+
 /**
  * @brief Contractive error estimate for stiff problems. (stiffness filter)
  *
@@ -1420,6 +1503,9 @@ void gbInternalContraction(DATA *data,
                            const double *y,
                            double *yt)
 {
+  if (!gbData->eventHappened)
+    return gbTwoStepError(data, threadData, nonlinsys, gbData, y, yt);
+
   GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
   CONTRACTIVE_DEFECT_ERROR *defect_err = gbData->tableau->t_transform->defect_err;
   BUTCHER_TABLEAU *tabl = nls->tabl;
