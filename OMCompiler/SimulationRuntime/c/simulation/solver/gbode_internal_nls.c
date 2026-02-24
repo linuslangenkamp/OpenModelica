@@ -1419,7 +1419,7 @@ void gbTwoStepFactorsRadauIIA3(double r, double *delta, double *beta, double *af
   *afac = 0.1;
 }
 
-// order 2, A-stable with adequate afac - R(r, -inf) = -6*r - 5
+// order 3, A-stable with adequate afac - R(r, -inf) = -6*r - 5
 void gbTwoStepFactorsLobattoIIIA3(double r, double *delta, double *beta, double *afac)
 {
   // looks kinda like the BDF2 finite differences
@@ -1432,6 +1432,28 @@ void gbTwoStepFactorsLobattoIIIA3(double r, double *delta, double *beta, double 
   beta[2] = 0.0;
 
   *afac = 0.05; // => choose smaller safety in tolerance calibration, e.g. 0.02 instead of 0.2
+}
+
+// order 4, A-stable for sufficiently small r
+void gbTwoStepFactorsLobattoIIIA4(double r, double *delta, double *beta, double *afac)
+{
+  double r2 = r * r;
+  double r3 = r2 * r;
+  double r4 = r2 * r2;
+  double r5 = r3 * r2;
+  double sq5 = sqrt(5.0);
+
+  delta[0] = (-613955*r4 + 274569*sq5*r4 - 776810*r3 + 347400*sq5*r3 - 273205*r2 + 122181*sq5*r2)/(-288900*r + 129200*sq5*r - 399250 + 178550*sq5);
+  delta[1] = (-2192433385*r4 + 980486017*sq5*r4 - 4781265875*r3 + 2138247103*sq5*r3 - 3529808845*r2 + 1578578505*sq5*r2)/(-461373250*r + 206332390*sq5*r - 176228900 + 78811960*sq5);
+  delta[2] = 19*r3/20 + 51*sq5*r3/20 - 13*r2/2 - 8*sq5*r2/5;
+  delta[3] = (-255*r5 - 19*sq5*r5 - 1295*r4 - 171*sq5*r4 - 1295*r3 + 149*sq5*r3 + 3770*r2 + 2106*sq5*r2)/(100*r2 + 100*sq5*r + 400*r + 200*sq5 + 500);
+
+  beta[0] = 0.0;
+  beta[1] = (57*sq5*r2 + 199*r2 - 471*sq5*r - 989*r - 213*sq5 - 475)/(20*r2 + 20*sq5*r + 80*r + 40*sq5 + 100);
+  beta[2] = 33./10;
+  beta[3] = 0.0;
+
+  *afac = 0.01;
 }
 
 void gbTwoStepBarFactors(BUTCHER_TABLEAU *tableau, const double *delta, const double *beta, double h, double h_prev, double *delta_bar, double *beta_bar)
@@ -1461,12 +1483,12 @@ void gbTwoStepBarFactors(BUTCHER_TABLEAU *tableau, const double *delta, const do
   }
 }
 
-void gbTwoStepError(DATA *data,
-                      threadData_t *threadData,
-                      NONLINEAR_SYSTEM_DATA *nonlinsys,
-                      DATA_GBODE *gbData,
-                      const double *y,
-                      double *yt)
+void gbInternalTwoStepError(DATA *data,
+                            threadData_t *threadData,
+                            NONLINEAR_SYSTEM_DATA *nonlinsys,
+                            DATA_GBODE *gbData,
+                            const double *y,
+                            double *yt)
 {
   GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
   CONTRACTIVE_DEFECT_ERROR *defect_err = gbData->tableau->t_transform->defect_err;
@@ -1482,7 +1504,7 @@ void gbTwoStepError(DATA *data,
   double delta[MAX_GBODE_FIRK_STAGES], beta[MAX_GBODE_FIRK_STAGES];
   double delta_bar[MAX_GBODE_FIRK_STAGES], beta_bar[MAX_GBODE_FIRK_STAGES];
 
-  gbTwoStepFactorsRadauIIA3(r, delta, beta, &a);
+  gbTwoStepFactorsLobattoIIIA3(r, delta, beta, &a);
   gbTwoStepBarFactors(gbData->tableau, delta, beta, h, h_prev, delta_bar, beta_bar);
 
   memset(yt, 0, nStates * sizeof(double));
@@ -1521,9 +1543,6 @@ void gbInternalContraction(DATA *data,
                            const double *y,
                            double *yt)
 {
-  if (!gbData->eventHappened)
-    return gbTwoStepError(data, threadData, nonlinsys, gbData, y, yt);
-
   GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
   CONTRACTIVE_DEFECT_ERROR *defect_err = gbData->tableau->t_transform->defect_err;
   BUTCHER_TABLEAU *tabl = nls->tabl;

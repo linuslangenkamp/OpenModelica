@@ -599,12 +599,23 @@ int full_implicit_RK(DATA* data, threadData_t* threadData, SOLVER_INFO* solverIn
                                          && gbData->nlsSolverMethod == GB_NLS_INTERNAL);
 
   // calculate yt(t_n+1) by contractive or standard embedded error estimate
+  
+  /* TODO: add flag -gberr=contractive for Radau and Gauss (clean up code for u = 0 only) 
+           add flag -gberr=twostep for all FIRK methods */
   if (!gbData->eventHappened)
+  {
+    gbData->tableau->error_order = nStages;
+    gbData->tableau->order_bt = nStages;
+    gbInternalTwoStepError(data, threadData, gbData->nlsData, gbData, gbData->y, gbData->yt);
+  }
+  else if (TRUE && FALSE)
   {
     gbInternalContraction(data, threadData, gbData->nlsData, gbData, gbData->y, gbData->yt);
   }
   else
   {
+    gbData->tableau->error_order = nStages - 1;
+    gbData->tableau->order_bt = nStages - 1;
     for (i = 0; i < nStates; i++) {
       gbData->yt[i] = gbData->yOld[i];
       for (stage_ = 0; stage_ < nStages; stage_++) {

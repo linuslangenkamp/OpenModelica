@@ -76,6 +76,13 @@ void gbInternalLinearCombinationSVP(STAGE_VALUE_PREDICTORS *svp,
                                     const double *y0,
                                     double *ypred);
 
+void gbInternalTwoStepError(DATA *data,
+                            threadData_t *threadData,
+                            NONLINEAR_SYSTEM_DATA *nonlinsys,
+                            DATA_GBODE *gbData,
+                            const double *y,
+                            double *yt);
+
 #ifdef __cplusplus
 };
 #endif
