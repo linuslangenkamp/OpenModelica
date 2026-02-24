@@ -1400,99 +1400,52 @@ NLS_SOLVER_STATUS gbInternalSolveNls(DATA *data,
 extern void gb_interpolation(enum GB_INTERPOL_METHOD interpolMethod, double ta, double* fa, double* dfa, double tb, double* fb, double* dfb, double t, double* f,
                              int nIdx, int* idx, int nStates, BUTCHER_TABLEAU* tableau, double* x, double *k);
 
-// order 3, L-stable error estimate - R(r, -inf) = 0
-void gbTwoStepFactorsRadauIIA3(double r, double *delta, double *beta, double *afac)
+/* Calculates the direct coefficients for the stages k. So we require
+      yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1
+*/
+
+// order 3, L-stable
+void gbTwoStepCompleteFactorsRadauIIA3(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
 {
   double r2 = r * r;
   double r3 = r2 * r;
   double r4 = r2 * r2;
-  double sq6 = sqrt(6.0);
 
-  delta[0] = (1.0/2.0)*r2*(-20*r3 - 5*sq6*r3 - 45*sq6*r2 + 45*r2 - 63*sq6*r + 108*r - 27*sq6 + 57)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
-  delta[1] = (1.0/2.0)*r2*(-20*r3 + 5*sq6*r3 + 45*r2 + 45*sq6*r2 + 108*r + 63*sq6*r + 57 + 27*sq6)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
-  delta[2] = r2*(20*r3 - 45*r2 - 108*r - 57)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
+  double div1 = (5.0*r4 + 32.0*r3 + 60.0*r2 + 48.0*r + 15.0);
+  double div2 = (5.0*r3 + 27.0*r2 + 33.0*r + 15.0);
 
-  beta[0] = (1.0/2.0)*(-70*sq6*r4 - 130*r4 - 176*sq6*r3 - 184*r3 - 171*sq6*r2 - 39*r2 - 78*sq6*r + 48*r - 15*sq6 + 15)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
-  beta[1] = (1.0/2.0)*(-130*r4 + 70*sq6*r4 - 184*r3 + 176*sq6*r3 - 39*r2 + 171*sq6*r2 + 48*r + 78*sq6*r + 15 + 15*sq6)/(5*r4 + 32*r3 + 60*r2 + 48*r + 15);
-  beta[2] = 0.0;
+  beta_bar[0] = h * 0.01388888888888888888888889*(-1547.219358530747954008506*r4 - 849.4897427831780981972841*r3 + 2149.654623558442675376221*r2 + 2380.848984692814902573061*r + 580.6515307716504657054082)/div1;
+  beta_bar[1] = h * 0.01388888888888888888888889*(1147.219358530747954008506*r4 + 4049.489742783178098197284*r3 + 5074.345376441557324623779*r2 + 2851.151015307185097426939*r + 595.3484692283495342945918) /div1;
+  beta_bar[2] = h * 0.4444444444444444444444444*(-10.0*r3 - 18.0*r2 - 12.0*r - 3.0)/div2;
+
+  delta_bar[0] = h_prev * 0.125*r2*(22.60612308660186282163259*r3 + 58.04540768504860288377556*r2 + 52.18163074019441153510223*r + 15.43928459844674006214297)/div1;
+  delta_bar[1] = h_prev * 0.125*r2*(81.39387691339813717836741*r3 + 13.95459231495139711622444*r2 - 124.1816307401944115351022*r - 87.43928459844674006214297)/div1;
+  delta_bar[2] = h_prev * r2*(2.0*r3 - 9.0*r2 - 18.0*r - 9.0)/div1;
 
   *afac = 0.1;
 }
 
-// order 3, A-stable with adequate afac - R(r, -inf) = -6*r - 5
-void gbTwoStepFactorsLobattoIIIA3(double r, double *delta, double *beta, double *afac)
+// order 3
+void gbTwoStepCompleteFactorsLobattoIIIA3(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
 {
-  // looks kinda like the BDF2 finite differences
-  delta[0] = -r;
-  delta[1] = 4*r;
-  delta[2] = -3*r;
+  beta_bar[0] = h * 5./6.;
+  beta_bar[1] = h * 4./3.;
+  beta_bar[2] = h * -1./6.;
 
-  beta[0] = 0.0;
-  beta[1] = 4.0;
-  beta[2] = 0.0;
+  double r_div_3 = r / 3.;
+  delta_bar[0] = h_prev * r_div_3;
+  delta_bar[1] = h_prev * -2. * r_div_3;
+  delta_bar[2] = h_prev * -2. * r_div_3;
 
-  *afac = 0.05; // => choose smaller safety in tolerance calibration, e.g. 0.02 instead of 0.2
+  *afac = 0.1;
 }
 
-// order 4, A-stable for sufficiently small r
-void gbTwoStepFactorsLobattoIIIA4(double r, double *delta, double *beta, double *afac)
-{
-  double r2 = r * r;
-  double r3 = r2 * r;
-  double r4 = r2 * r2;
-  double r5 = r3 * r2;
-  double sq5 = sqrt(5.0);
 
-  delta[0] = (-613955*r4 + 274569*sq5*r4 - 776810*r3 + 347400*sq5*r3 - 273205*r2 + 122181*sq5*r2)/(-288900*r + 129200*sq5*r - 399250 + 178550*sq5);
-  delta[1] = (-2192433385*r4 + 980486017*sq5*r4 - 4781265875*r3 + 2138247103*sq5*r3 - 3529808845*r2 + 1578578505*sq5*r2)/(-461373250*r + 206332390*sq5*r - 176228900 + 78811960*sq5);
-  delta[2] = 19*r3/20 + 51*sq5*r3/20 - 13*r2/2 - 8*sq5*r2/5;
-  delta[3] = (-255*r5 - 19*sq5*r5 - 1295*r4 - 171*sq5*r4 - 1295*r3 + 149*sq5*r3 + 3770*r2 + 2106*sq5*r2)/(100*r2 + 100*sq5*r + 400*r + 200*sq5 + 500);
-
-  beta[0] = 0.0;
-  beta[1] = (57*sq5*r2 + 199*r2 - 471*sq5*r - 989*r - 213*sq5 - 475)/(20*r2 + 20*sq5*r + 80*r + 40*sq5 + 100);
-  beta[2] = 33./10;
-  beta[3] = 0.0;
-
-  *afac = 0.01;
-}
-
-void gbTwoStepBarFactors(BUTCHER_TABLEAU *tableau, const double *delta, const double *beta, double h, double h_prev, double *delta_bar, double *beta_bar)
-{
-  const double *A = tableau->A;
-  int nStages = (int) tableau->nStages;
-
-  for (int i = 0; i < nStages; i++)
-  {
-    delta_bar[i] = 0;
-    beta_bar[i]  = 0;
-  }
-
-  for (int i = 0; i < nStages; i++)
-  {
-    for (int j = 0; j < nStages; j++)
-    {
-      delta_bar[j] += delta[i] * A[i * nStages + j];
-      beta_bar[j]  += beta[i] * A[i * nStages + j];
-    }
-  }
-
-  for (int i = 0; i < nStages; i++)
-  {
-    delta_bar[i] *= h_prev;
-    beta_bar[i] *= h;
-  }
-}
-
-/* Calculates the direct coefficients for the stages k. So we require
-      yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1
-*/
+// order 4
 void gbTwoStepCompleteFactorsLobattoIIIA4(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
 {
   double r2 = r * r;
   double r3 = r2 * r;
-  double r4 = r2 * r2;
-  double r5 = r3 * r2;
-  double sq5 = sqrt(5.0);
 
   double div = (600.0*r2 + 3741.640786499873817845504*r + 5683.281572999747635691008);
 
@@ -1506,7 +1459,7 @@ void gbTwoStepCompleteFactorsLobattoIIIA4(double r, double h, double h_prev, dou
   delta_bar[2] = h_prev * r2 * (297.4852915724960042317743*r3 + 521.2685904525229230914001*r2 - 2647.395401662328602573477*r + 7915.135221862143535413549)/div;
   delta_bar[3] = h_prev * r2 * (-297.4852915724960042317743*r3 - 1479.882332579968033854194*r2 - 403.0356280950382752535304*r + 5870.187111194693377364575)/div;
 
-  *afac = 0.01;
+  *afac = 0.1;
 }
 
 void gbInternalTwoStepError(DATA *data,
@@ -1527,12 +1480,10 @@ void gbInternalTwoStepError(DATA *data,
   double r = h / h_prev;
   double a;
 
-  double delta[MAX_GBODE_FIRK_STAGES], beta[MAX_GBODE_FIRK_STAGES];
   double delta_bar[MAX_GBODE_FIRK_STAGES], beta_bar[MAX_GBODE_FIRK_STAGES];
 
-  //gbTwoStepFactorsLobattoIIIA4(r, delta, beta, &a);
-  //gbTwoStepBarFactors(gbData->tableau, delta, beta, h, h_prev, delta_bar, beta_bar);
-  gbTwoStepCompleteFactorsLobattoIIIA4(r, h, h_prev, delta_bar, beta_bar, &a);
+  gbTwoStepCompleteFactorsLobattoIIIA3(r, h, h_prev, delta_bar, beta_bar, &a);
+
   memset(yt, 0, nStates * sizeof(double));
   for (int i = 0; i < nStages; i++)
   {
