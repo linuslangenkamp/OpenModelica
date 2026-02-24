@@ -1483,6 +1483,32 @@ void gbTwoStepBarFactors(BUTCHER_TABLEAU *tableau, const double *delta, const do
   }
 }
 
+/* Calculates the direct coefficients for the stages k. So we require
+      yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1
+*/
+void gbTwoStepCompleteFactorsLobattoIIIA4(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
+{
+  double r2 = r * r;
+  double r3 = r2 * r;
+  double r4 = r2 * r2;
+  double r5 = r3 * r2;
+  double sq5 = sqrt(5.0);
+
+  double div = (600.0*r2 + 3741.640786499873817845504*r + 5683.281572999747635691008);
+
+  beta_bar[0] = h * (1224.852915724960042317743*r2 - 5855.869003892199896775891*r - 1778.09282245991083127749)/div;
+  beta_bar[1] = h * (2749.991416277390431829179*r2 - 6058.632935914700107079482*r + 3036.706564587355942040284)/div;
+  beta_bar[2] = h * (117.3173741650576231838864*r2 + 4879.814915147342482610471*r + 5224.396134799764459978274)/div;
+  beta_bar[3] = h * (47.4852915724960042317743*r2 - 964.0464112299554156387448*r - 799.7283039274619350500604)/div;
+
+  delta_bar[0] = h_prev * r2 * (-297.4852915724960042317743*r3 - 887.4264578624800211588715*r2 + 388.423352242464879300332*r + 978.3645185324488962274292)/div;
+  delta_bar[1] = h_prev * r2 * (297.4852915724960042317743*r3 + 1846.040199989925131921666*r2 - 877.6393202250021030359083*r - 3023.312629199899054276403)/div;
+  delta_bar[2] = h_prev * r2 * (297.4852915724960042317743*r3 + 521.2685904525229230914001*r2 - 2647.395401662328602573477*r + 7915.135221862143535413549)/div;
+  delta_bar[3] = h_prev * r2 * (-297.4852915724960042317743*r3 - 1479.882332579968033854194*r2 - 403.0356280950382752535304*r + 5870.187111194693377364575)/div;
+
+  *afac = 0.01;
+}
+
 void gbInternalTwoStepError(DATA *data,
                             threadData_t *threadData,
                             NONLINEAR_SYSTEM_DATA *nonlinsys,
@@ -1504,9 +1530,9 @@ void gbInternalTwoStepError(DATA *data,
   double delta[MAX_GBODE_FIRK_STAGES], beta[MAX_GBODE_FIRK_STAGES];
   double delta_bar[MAX_GBODE_FIRK_STAGES], beta_bar[MAX_GBODE_FIRK_STAGES];
 
-  gbTwoStepFactorsLobattoIIIA3(r, delta, beta, &a);
-  gbTwoStepBarFactors(gbData->tableau, delta, beta, h, h_prev, delta_bar, beta_bar);
-
+  //gbTwoStepFactorsLobattoIIIA4(r, delta, beta, &a);
+  //gbTwoStepBarFactors(gbData->tableau, delta, beta, h, h_prev, delta_bar, beta_bar);
+  gbTwoStepCompleteFactorsLobattoIIIA4(r, h, h_prev, delta_bar, beta_bar, &a);
   memset(yt, 0, nStates * sizeof(double));
   for (int i = 0; i < nStages; i++)
   {
