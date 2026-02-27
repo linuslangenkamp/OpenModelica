@@ -43,13 +43,15 @@ extern "C" {
 /**
  * @brief Extrapolation method for single-rate / multi-rate error estimation.
  */
-enum GB_EXTRAPOL_METHOD{
-  GB_EXT_UNKNOWN = 0,    /* Unknown method */
-
-  GB_EXT_DEFAULT,        /* Default, depending on the Runge-Kutta method */
-  GB_EXT_RICHARDSON,     /* Richardson extrapolation */
-  GB_EXT_EMBEDDED        /* Embedded scheme */
-};
+typedef enum GB_EXTRAPOL_METHOD
+{
+  GB_EXT_UNKNOWN     = 0,  /* Unknown method */
+  GB_EXT_DEFAULT     = 1,  /* Default, depending on the Runge-Kutta method */
+  GB_EXT_RICHARDSON  = 2,  /* Richardson extrapolation */
+  GB_EXT_EMBEDDED    = 3,  /* Embedded scheme */
+  GB_EXT_CONTRACTIVE = 4,  /* Contractive estimate, only for -gbnls=internal and FIRK methods */
+  GB_EXT_TWOSTEP     = 5   /* Two-step error estimate a la Pinto for FIRK methods */
+} GB_EXTRAPOL_METHOD;
 
 // Declaration only
 extern unsigned int use_fhr;

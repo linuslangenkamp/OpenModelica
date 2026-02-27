@@ -1186,7 +1186,7 @@ void *gbInternalNlsAllocate(int size,
   // We transform the error such that the error term err = || v || = sqrt(1/n * sum (v[i] / scal[i])^2) is scaled with same measure
   // As we later have v = sum (b - bt) * k = min of local error of b and bt -> scale ATOL and RTOL w.r.t. (min(b, bt) + 1) / (b + 1)
 
-  if (tabl->richardson)
+  if (tabl->errorEstimate == GB_EXT_RICHARDSON)
   {
     nls->tol_scaled.rtol = nls->tol_integrator.rtol;
     nls->tol_scaled.atol = nls->tol_integrator.atol;
@@ -1404,64 +1404,6 @@ extern void gb_interpolation(enum GB_INTERPOL_METHOD interpolMethod, double ta, 
       yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1
 */
 
-// order 3, L-stable
-void gbTwoStepCompleteFactorsRadauIIA3(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
-{
-  double r2 = r * r;
-  double r3 = r2 * r;
-  double r4 = r2 * r2;
-
-  double div1 = (5.0*r4 + 32.0*r3 + 60.0*r2 + 48.0*r + 15.0);
-  double div2 = (5.0*r3 + 27.0*r2 + 33.0*r + 15.0);
-
-  beta_bar[0] = h * 0.01388888888888888888888889*(-1547.219358530747954008506*r4 - 849.4897427831780981972841*r3 + 2149.654623558442675376221*r2 + 2380.848984692814902573061*r + 580.6515307716504657054082)/div1;
-  beta_bar[1] = h * 0.01388888888888888888888889*(1147.219358530747954008506*r4 + 4049.489742783178098197284*r3 + 5074.345376441557324623779*r2 + 2851.151015307185097426939*r + 595.3484692283495342945918) /div1;
-  beta_bar[2] = h * 0.4444444444444444444444444*(-10.0*r3 - 18.0*r2 - 12.0*r - 3.0)/div2;
-
-  delta_bar[0] = h_prev * 0.125*r2*(22.60612308660186282163259*r3 + 58.04540768504860288377556*r2 + 52.18163074019441153510223*r + 15.43928459844674006214297)/div1;
-  delta_bar[1] = h_prev * 0.125*r2*(81.39387691339813717836741*r3 + 13.95459231495139711622444*r2 - 124.1816307401944115351022*r - 87.43928459844674006214297)/div1;
-  delta_bar[2] = h_prev * r2*(2.0*r3 - 9.0*r2 - 18.0*r - 9.0)/div1;
-
-  *afac = 0.1;
-}
-
-// order 3
-void gbTwoStepCompleteFactorsLobattoIIIA3(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
-{
-  beta_bar[0] = h * 5./6.;
-  beta_bar[1] = h * 4./3.;
-  beta_bar[2] = h * -1./6.;
-
-  double r_div_3 = r / 3.;
-  delta_bar[0] = h_prev * r_div_3;
-  delta_bar[1] = h_prev * -2. * r_div_3;
-  delta_bar[2] = h_prev * -2. * r_div_3;
-
-  *afac = 0.1;
-}
-
-
-// order 4
-void gbTwoStepCompleteFactorsLobattoIIIA4(double r, double h, double h_prev, double *delta_bar, double *beta_bar, double *afac)
-{
-  double r2 = r * r;
-  double r3 = r2 * r;
-
-  double div = (600.0*r2 + 3741.640786499873817845504*r + 5683.281572999747635691008);
-
-  beta_bar[0] = h * (1224.852915724960042317743*r2 - 5855.869003892199896775891*r - 1778.09282245991083127749)/div;
-  beta_bar[1] = h * (2749.991416277390431829179*r2 - 6058.632935914700107079482*r + 3036.706564587355942040284)/div;
-  beta_bar[2] = h * (117.3173741650576231838864*r2 + 4879.814915147342482610471*r + 5224.396134799764459978274)/div;
-  beta_bar[3] = h * (47.4852915724960042317743*r2 - 964.0464112299554156387448*r - 799.7283039274619350500604)/div;
-
-  delta_bar[0] = h_prev * r2 * (-297.4852915724960042317743*r3 - 887.4264578624800211588715*r2 + 388.423352242464879300332*r + 978.3645185324488962274292)/div;
-  delta_bar[1] = h_prev * r2 * (297.4852915724960042317743*r3 + 1846.040199989925131921666*r2 - 877.6393202250021030359083*r - 3023.312629199899054276403)/div;
-  delta_bar[2] = h_prev * r2 * (297.4852915724960042317743*r3 + 521.2685904525229230914001*r2 - 2647.395401662328602573477*r + 7915.135221862143535413549)/div;
-  delta_bar[3] = h_prev * r2 * (-297.4852915724960042317743*r3 - 1479.882332579968033854194*r2 - 403.0356280950382752535304*r + 5870.187111194693377364575)/div;
-
-  *afac = 0.1;
-}
-
 void gbInternalTwoStepError(DATA *data,
                             threadData_t *threadData,
                             NONLINEAR_SYSTEM_DATA *nonlinsys,
@@ -1469,20 +1411,19 @@ void gbInternalTwoStepError(DATA *data,
                             const double *y,
                             double *yt)
 {
-  GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
-  CONTRACTIVE_DEFECT_ERROR *defect_err = gbData->tableau->t_transform->defect_err;
+  assert(gbData->tableau->two_step != NULL);
 
-  int nStates = gbData->nStates;
-  int nStages = (int)gbData->tableau->nStages;
+  const int nStates = gbData->nStates;
+  const int nStages = (int)gbData->tableau->nStages;
 
-  double h_prev = gbData->extrapolationStepSize;
-  double h = gbData->stepSize;
-  double r = h / h_prev;
-  double a;
+  const double h_prev = gbData->extrapolationStepSize;
+  const double h = gbData->stepSize;
+  const double r = h / h_prev;
+  const double a = gbData->tableau->two_step->a;
 
   double delta_bar[MAX_GBODE_FIRK_STAGES], beta_bar[MAX_GBODE_FIRK_STAGES];
 
-  gbTwoStepCompleteFactorsLobattoIIIA3(r, h, h_prev, delta_bar, beta_bar, &a);
+  gbData->tableau->two_step->get(r, h, h_prev, delta_bar, beta_bar);
 
   memset(yt, 0, nStates * sizeof(double));
   for (int i = 0; i < nStages; i++)

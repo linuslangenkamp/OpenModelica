@@ -38,6 +38,8 @@
 
 #include "kinsolSolver.h"
 
+#define min(a,b) (((a) < (b)) ? (a) : (b))
+
 /**
  * @brief Generic multi-step function.
  *
@@ -371,13 +373,13 @@ int expl_diag_impl_RK(DATA* data, threadData_t* threadData, SOLVER_INFO* solverI
   for (i=0; i<nStates; i++)
   {
     gbData->y[i]  = gbData->yOld[i];
-    if (!gbData->tableau->richardson) {
+    if (gbData->tableau->errorEstimate != GB_EXT_RICHARDSON) {
       gbData->yt[i] = gbData->yOld[i];
     }
     for (stage_=0; stage_<nStages; stage_++)
     {
       gbData->y[i]  += gbData->stepSize * gbData->tableau->b[stage_]  * (gbData->k + stage_ * nStates)[i];
-      if (!gbData->tableau->richardson) {
+      if (gbData->tableau->errorEstimate != GB_EXT_RICHARDSON) {
         gbData->yt[i] += gbData->stepSize * gbData->tableau->bt[stage_] * (gbData->k + stage_ * nStates)[i];
       }
     }
@@ -598,24 +600,20 @@ int full_implicit_RK(DATA* data, threadData_t* threadData, SOLVER_INFO* solverIn
                                          && gbData->tableau->t_transform->defect_err != NULL
                                          && gbData->nlsSolverMethod == GB_NLS_INTERNAL);
 
-  // calculate yt(t_n+1) by contractive or standard embedded error estimate
-  
-  /* TODO: add flag -gberr=contractive for Radau and Gauss (clean up code for u = 0 only) 
-           add flag -gberr=twostep for all FIRK methods */
-  if (!gbData->eventHappened)
+  // calculate yt(t_n+1) by two-step, contractive or standard embedded error estimate
+  if (gbData->tableau->errorEstimate == GB_EXT_TWOSTEP && !gbData->eventHappened)
   {
-    gbData->tableau->error_order = nStages;
-    gbData->tableau->order_bt = nStages;
+    gbData->tableau->error_order = min(gbData->tableau->order_b, gbData->tableau->two_step->order);
     gbInternalTwoStepError(data, threadData, gbData->nlsData, gbData, gbData->y, gbData->yt);
   }
-  else if (TRUE && FALSE)
+  else if (gbData->tableau->errorEstimate != GB_EXT_EMBEDDED && gbData->tableau->t_transform != NULL && gbData->tableau->t_transform->defect_err != NULL)
   {
+    gbData->tableau->error_order = min(gbData->tableau->order_b, gbData->tableau->t_transform->defect_err->order);
     gbInternalContraction(data, threadData, gbData->nlsData, gbData, gbData->y, gbData->yt);
   }
   else
   {
-    gbData->tableau->error_order = nStages - 1;
-    gbData->tableau->order_bt = nStages - 1;
+    gbData->tableau->error_order = min(gbData->tableau->order_bt, gbData->tableau->order_b);
     for (i = 0; i < nStates; i++) {
       gbData->yt[i] = gbData->yOld[i];
       for (stage_ = 0; stage_ < nStages; stage_++) {

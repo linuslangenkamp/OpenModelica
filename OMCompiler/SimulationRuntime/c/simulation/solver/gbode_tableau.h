@@ -38,18 +38,44 @@
 
 #include "../../util/simulation_options.h"
 #include "../../openmodelica_types.h"
+#include "gbode_conf.h"
 
 #if defined(__cplusplus)
 extern "C" {
 #endif
 
 typedef struct BUTCHER_TABLEAU BUTCHER_TABLEAU;
+
 /**
  * @brief Function to compute interpolation using dense output.
  */
 typedef void (*gb_dense_output)(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates);
 
+/**
+ * @brief Function to compute two-step estimator coefficients: yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1, fills the vectors beta_bar and delta_bar.
+ */
+typedef void (*gb_two_step_factors)(double r, double h, double h_prev, double *delta_bar, double *beta_bar);
+
 #define MAX_GBODE_FIRK_STAGES 7
+
+/* yt_n+1 := y_n + beta_bar^T * k_n + delta_bar^T * k_n-1 */
+typedef struct TWO_STEP_ERROR
+{
+  /**
+   * TODO: write good comments here 
+   */
+  gb_two_step_factors get;
+
+  /**
+   * @brief Order of the error.
+   */
+  unsigned int order;
+
+  /**
+   * @brief Factor err := a * yt + (1 - a) * y, where y is the main solution and yt is the constructed two-step solution.
+   */
+  double a;
+} TWO_STEP_ERROR;
 
 /**
  * @brief Data for contractive error estimates (requires T-Transformation + internal NLS strategy).
@@ -87,6 +113,11 @@ typedef struct CONTRACTIVE_DEFECT_ERROR {
    * @brief Weights of the stage values d(u)^T * A.
    */
   double *dT_A;
+
+  /**
+   * @brief Order of the error.
+   */
+  unsigned int order;
 
   /**
    * @brief Uncollocated node u at which to perform the additional function evaluation.
@@ -310,14 +341,14 @@ typedef struct BUTCHER_TABLEAU {
   unsigned int order_bt;              /* Order of the embedded Runge-Kutta method */
   unsigned int error_order;           /* Usually min(order_b, order_bt) */
   double fac;                         /* Security factor for step size control */
-  modelica_boolean  richardson;       /* if no embedded version is available, Richardson
-                                         extrapolation can be used for step size control */
+  GB_EXTRAPOL_METHOD errorEstimate;   /* Error estimate used for step-size control */
   modelica_boolean withDenseOutput;   /* Availability of dense output interpolation formulas */
   modelica_boolean isKLeftAvailable;  /* Availability of function values on left hand side */
   modelica_boolean isKRightAvailable; /* Availability of function values on right hand side */
   gb_dense_output dense_output;       /* Generic dense output function */
   T_TRANSFORM *t_transform;           /* T-transformation for FIRK methods */
   STAGE_VALUE_PREDICTORS *svp;        /* Stage-Value-Predictors for (E)SDIRK methods */
+  TWO_STEP_ERROR *two_step;           /* Two-step error estimator */
 } BUTCHER_TABLEAU;
 
 /**

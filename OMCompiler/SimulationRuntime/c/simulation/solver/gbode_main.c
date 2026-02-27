@@ -993,7 +993,7 @@ int gbodef_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo, d
 
       // do one integration step resulting in two different approximations
       // results are stored in gbData->y and gbData->yt
-      if (gbfData->tableau->richardson) {
+      if (gbfData->tableau->errorEstimate == GB_EXT_RICHARDSON) {
         integrator_step_info = gbodef_richardson(data, threadData, solverInfo);
       } else {
         integrator_step_info = gbfData->step_fun(data, threadData, solverInfo);
@@ -1447,7 +1447,7 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
       // Choose the integration method based on the tableau:
       // - If Richardson extrapolation is enabled, use gbode_richardson.
       // - Otherwise, use the default step function stored in gbData->step_fun.
-      if (gbData->tableau->richardson) {
+      if (gbData->tableau->errorEstimate == GB_EXT_RICHARDSON) {
         gb_step_info = gbode_richardson(data, threadData, solverInfo);
       } else {
         gb_step_info = gbData->step_fun(data, threadData, solverInfo);

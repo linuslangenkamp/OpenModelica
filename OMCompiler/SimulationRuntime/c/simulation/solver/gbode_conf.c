@@ -318,12 +318,18 @@ enum GB_EXTRAPOL_METHOD getGBErr(enum _FLAG flag)
       extrapolationMethod = GB_EXT_RICHARDSON;
     } else if (strcmp(flag_value, "embedded")==0) {
       extrapolationMethod = GB_EXT_EMBEDDED;
+    } else if (strcmp(flag_value, "contractive")==0) {
+      extrapolationMethod = GB_EXT_CONTRACTIVE;
+    } else if (strcmp(flag_value, "twostep")==0) {
+      extrapolationMethod = GB_EXT_TWOSTEP;
     } else {
       errorStreamPrint(OMC_LOG_STDOUT, 0, "Illegal value '%s' for flag -%s", flag_value, FLAG_NAME[flag]);
       infoStreamPrint(OMC_LOG_STDOUT, 1, "Allowed values are:");
       infoStreamPrint(OMC_LOG_STDOUT, 0, "default");
       infoStreamPrint(OMC_LOG_STDOUT, 0, "richardson");
       infoStreamPrint(OMC_LOG_STDOUT, 0, "embedded");
+      infoStreamPrint(OMC_LOG_STDOUT, 0, "contractive");
+      infoStreamPrint(OMC_LOG_STDOUT, 0, "twostep");
       messageClose(OMC_LOG_STDOUT);
       omc_throw(NULL);
     }

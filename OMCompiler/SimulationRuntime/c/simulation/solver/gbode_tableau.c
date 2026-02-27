@@ -34,7 +34,6 @@
  */
 
 #include "gbode_tableau.h"
-#include "gbode_conf.h"
 
 #include <string.h>
 
@@ -100,7 +99,7 @@ void setStageValuePredictors(BUTCHER_TABLEAU *tableau, const double *A_pred, con
   memcpy(tableau->svp->type, type, stages * sizeof(STAGE_VALUE_PREDICTOR_TYPE));
 }
 
-void setContractiveDefectError(BUTCHER_TABLEAU *tableau, const double *dT_A, double u)
+void setContractiveDefectError(BUTCHER_TABLEAU *tableau, const double *dT_A, unsigned int order, double u)
 {
   if (tableau->t_transform == NULL)
   {
@@ -115,10 +114,16 @@ void setContractiveDefectError(BUTCHER_TABLEAU *tableau, const double *dT_A, dou
   defect->dT_A = (double *) malloc(tableau->nStages * sizeof(double));
   memcpy(defect->dT_A, dT_A, tableau->nStages * sizeof(double));
 
+  defect->order = order;
   defect->u = u;
+}
 
-  // order of contractive error is = s
-  tableau->order_bt = tableau->nStages;
+void setTwoStepEstimator(BUTCHER_TABLEAU *tableau, gb_two_step_factors two_step_fn, unsigned int order, double a)
+{
+  tableau->two_step = (TWO_STEP_ERROR *) malloc(sizeof(TWO_STEP_ERROR));
+  tableau->two_step->get = two_step_fn;
+  tableau->two_step->order = order;
+  tableau->two_step->a = a;
 }
 
 void setTTransform(BUTCHER_TABLEAU *tableau, const double *A_part_inv, const double *T, const double *T_inv, const double *gamma, const double *alpha, const double *beta,
@@ -569,9 +574,9 @@ void getButcherTableau_SDIRK2(BUTCHER_TABLEAU* tableau)
 // TODO: Describe me
 void getButcherTableau_MS(BUTCHER_TABLEAU* tableau)
 {
-  if (tableau->richardson) {
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     warningStreamPrint(OMC_LOG_STDOUT, 0,"Richardson extrapolation is not available for multi-step methods");
-    tableau->richardson = FALSE;
+    tableau->errorEstimate = GB_EXT_EMBEDDED;
   }
 
   tableau->nStages = 2;
@@ -614,7 +619,7 @@ void getButcherTableau_HEUN(BUTCHER_TABLEAU* tableau)
 // TODO: Describe me
 void getButcherTableau_EXPLEULER(BUTCHER_TABLEAU* tableau)
 {
-  if (tableau->richardson) {
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     tableau->nStages = 1;
     tableau->order_b = 1;
 
@@ -649,7 +654,7 @@ void getButcherTableau_EXPLEULER(BUTCHER_TABLEAU* tableau)
 // TODO: Describe me
 void getButcherTableau_RUNGEKUTTA(BUTCHER_TABLEAU* tableau)
 {
-  if (tableau->richardson) {
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     tableau->nStages = 4;
     tableau->order_b = 4;
 
@@ -916,6 +921,25 @@ void denseOutput_Radau_IIA_3(BUTCHER_TABLEAU* tableau, double* yOld, double* x, 
   denseOutput(tableau, yOld, x, k, dt, stepSize, y, nIdx, idx, nStates);
 }
 
+// order 3, L-stable
+void twoStep_Radau_IIA_3(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  double r2 = r * r;
+  double r3 = r2 * r;
+  double r4 = r2 * r2;
+
+  double div1 = (5.0*r4 + 32.0*r3 + 60.0*r2 + 48.0*r + 15.0);
+  double div2 = (5.0*r3 + 27.0*r2 + 33.0*r + 15.0);
+
+  beta_bar[0] = h * 0.01388888888888888888888889*(-1547.219358530747954008506*r4 - 849.4897427831780981972841*r3 + 2149.654623558442675376221*r2 + 2380.848984692814902573061*r + 580.6515307716504657054082)/div1;
+  beta_bar[1] = h * 0.01388888888888888888888889*(1147.219358530747954008506*r4 + 4049.489742783178098197284*r3 + 5074.345376441557324623779*r2 + 2851.151015307185097426939*r + 595.3484692283495342945918) /div1;
+  beta_bar[2] = h * 0.4444444444444444444444444*(-10.0*r3 - 18.0*r2 - 12.0*r - 3.0)/div2;
+
+  delta_bar[0] = h_prev * 0.125*r2*(22.60612308660186282163259*r3 + 58.04540768504860288377556*r2 + 52.18163074019441153510223*r + 15.43928459844674006214297)/div1;
+  delta_bar[1] = h_prev * 0.125*r2*(81.39387691339813717836741*r3 + 13.95459231495139711622444*r2 - 124.1816307401944115351022*r - 87.43928459844674006214297)/div1;
+  delta_bar[2] = h_prev * r2*(2.0*r3 - 9.0*r2 - 18.0*r - 9.0)/div1;
+}
+
 /* 3-step, order 5(2), L-stable Radau IIA */
 void getButcherTableau_RADAU_IIA_3(BUTCHER_TABLEAU* tableau)
 {
@@ -964,8 +988,12 @@ void getButcherTableau_RADAU_IIA_3(BUTCHER_TABLEAU* tableau)
 
   const double dT_A[] = { 1.558078204724922382431975, -0.8914115380582557157653087, 0.3333333333333333333333333 };
   const double u = 0.0;
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
 
-  setContractiveDefectError(tableau, dT_A, u);
+  const double a = 0.1;
+  const unsigned int order_two_step = 3;
+  setTwoStepEstimator(tableau, twoStep_Radau_IIA_3, order_two_step , a);
 }
 
 void denseOutput_Radau_IIA_4(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1098,8 +1126,8 @@ void getButcherTableau_RADAU_IIA_5(BUTCHER_TABLEAU* tableau)
 
   const double dT_A[] = { 1.586407900186328249755967, -1.008117881498372989065673, 0.7309748661597874614134016, -0.5092648848477427221036966, 0.2 };
   const double u = 0.0;
-
-  setContractiveDefectError(tableau, dT_A, u);
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
 }
 
 void denseOutput_Radau_IIA_6(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1254,8 +1282,8 @@ void getButcherTableau_RADAU_IIA_7(BUTCHER_TABLEAU* tableau)
 
   const double dT_A[] = { 1.594064218561041781197339, -1.036553752196476461002723, 0.7938217234907926875176341, -0.6325776522499342252619287, 0.4976107136030013134425167, -0.3592223940655679530356959, 0.1428571428571428571428571 };
   const double u = 0.0;
-
-  setContractiveDefectError(tableau, dT_A, u);
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
 }
 
 void denseOutput_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1265,6 +1293,19 @@ void denseOutput_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau, double* yOld, double* 
   tableau->b_dt[2] = dt*(0.6666666666666666666666667*dt - 0.5);
 
   denseOutput(tableau, yOld, x, k, dt, stepSize, y, nIdx, idx, nStates);
+}
+
+// order 3
+void twoStep_Lobatto_IIIA_3(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  beta_bar[0] = h * 5./6.;
+  beta_bar[1] = h * 4./3.;
+  beta_bar[2] = h * -1./6.;
+
+  double r_div_3 = r / 3.;
+  delta_bar[0] = h_prev * r_div_3;
+  delta_bar[1] = h_prev * -2. * r_div_3;
+  delta_bar[2] = h_prev * -2. * r_div_3;
 }
 
 // TODO: Describe me
@@ -1317,6 +1358,10 @@ void getButcherTableau_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau)
   };
 
   setTTransform(tableau, A_part_inv, T, T_inv, gamma, alpha, beta, TRUE, FALSE, 0, 1, phi, rho);
+
+  const double a = 0.1;
+  const unsigned int order_two_step = 3;
+  setTwoStepEstimator(tableau, twoStep_Lobatto_IIIA_3, order_two_step, a);
 }
 
 void denseOutput_LOBATTO_IIIA_4(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1327,6 +1372,25 @@ void denseOutput_LOBATTO_IIIA_4(BUTCHER_TABLEAU* tableau, double* yOld, double* 
   tableau->b_dt[3] = dt*(dt*(1.25*dt - 1.666666666666666666666667) + 0.5);
 
   denseOutput(tableau, yOld, x, k, dt, stepSize, y, nIdx, idx, nStates);
+}
+
+// order 4
+void twoStep_Lobatto_IIIA_4(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  double r2 = r * r;
+  double r3 = r2 * r;
+
+  double div = (600.0*r2 + 3741.640786499873817845504*r + 5683.281572999747635691008);
+
+  beta_bar[0] = h * (1224.852915724960042317743*r2 - 5855.869003892199896775891*r - 1778.09282245991083127749)/div;
+  beta_bar[1] = h * (2749.991416277390431829179*r2 - 6058.632935914700107079482*r + 3036.706564587355942040284)/div;
+  beta_bar[2] = h * (117.3173741650576231838864*r2 + 4879.814915147342482610471*r + 5224.396134799764459978274)/div;
+  beta_bar[3] = h * (47.4852915724960042317743*r2 - 964.0464112299554156387448*r - 799.7283039274619350500604)/div;
+
+  delta_bar[0] = h_prev * r2 * (-297.4852915724960042317743*r3 - 887.4264578624800211588715*r2 + 388.423352242464879300332*r + 978.3645185324488962274292)/div;
+  delta_bar[1] = h_prev * r2 * (297.4852915724960042317743*r3 + 1846.040199989925131921666*r2 - 877.6393202250021030359083*r - 3023.312629199899054276403)/div;
+  delta_bar[2] = h_prev * r2 * (297.4852915724960042317743*r3 + 521.2685904525229230914001*r2 - 2647.395401662328602573477*r + 7915.135221862143535413549)/div;
+  delta_bar[3] = h_prev * r2 * (-297.4852915724960042317743*r3 - 1479.882332579968033854194*r2 - 403.0356280950382752535304*r + 5870.187111194693377364575)/div;
 }
 
 // TODO: Describe me
@@ -1387,9 +1451,13 @@ void getButcherTableau_LOBATTO_IIIA_4(BUTCHER_TABLEAU* tableau)
   /* is possible, but also not stable
   const double dT_A[] = { 0.075, 0.7486067977499789696409174, 0.3013932022500210303590826, -0.125 };
   const double u = 0.3;
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
+  */
 
-  setContractiveDefectError(tableau, dT_A, u);
-   */
+  const double a = 0.1;
+  const unsigned int order_two_step = 4;
+  setTwoStepEstimator(tableau, twoStep_Lobatto_IIIA_4, order_two_step, a);
 }
 
 // TODO: Describe me
@@ -1480,6 +1548,23 @@ void getButcherTableau_LOBATTO_IIIB_4(BUTCHER_TABLEAU* tableau)
   setTTransform(tableau, A_part_inv, T, T_inv, gamma, alpha, beta, FALSE, TRUE, 1, 1, NULL, NULL);
 }
 
+// order 2, L vanishing
+void twoStep_Lobatto_IIIC_3(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  double r2 = r * r;
+
+  double iq1 = 1.0 / (6*(r + 1));
+  double iq2 = 1.0 / (2*r + 2);
+
+  beta_bar[0] = h * (-4*r2 + r + 1) * iq1;
+  beta_bar[1] = h * (8*r2 + 16*r + 7) * iq1;
+  beta_bar[2] = h * (-4*r2 - 5*r - 2) * iq1;
+
+  delta_bar[0] = 0;
+  delta_bar[1] = h_prev * -r2 * iq2;
+  delta_bar[2] = h_prev * -r2 * iq2;
+}
+
 // TODO: Describe me
 void getButcherTableau_LOBATTO_IIIC_3(BUTCHER_TABLEAU* tableau)
 {
@@ -1523,6 +1608,10 @@ void getButcherTableau_LOBATTO_IIIC_3(BUTCHER_TABLEAU* tableau)
   };
 
   setTTransform(tableau, A_part_inv, T, T_inv, gamma, alpha, beta, FALSE, FALSE, 1, 1, NULL, NULL);
+
+  const double a = 0.1;
+  const unsigned int order_two_step = 2;
+  setTwoStepEstimator(tableau, twoStep_Lobatto_IIIC_3, order_two_step, a);
 }
 
 // TODO: Describe me
@@ -1698,8 +1787,8 @@ void getButcherTableau_GAUSS3(BUTCHER_TABLEAU* tableau)
 
   const double dT_A[] = { 1.478830557701236147529878, -0.6666666666666666666666667, 0.1878361089654305191367891 };
   const double u = 0.0;
-
-  setContractiveDefectError(tableau, dT_A, u);
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
 }
 
 void denseOutput_GAUSS4(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1833,8 +1922,8 @@ void getButcherTableau_GAUSS5(BUTCHER_TABLEAU* tableau)
 
   const double dT_A[] = { 1.551408049094313012813028, -0.8931583920000717373261768, 0.5333333333333333333333333, -0.2679416522233875093041099, 0.07635866179581290048392539 };
   const double u = 0.0;
-
-  setContractiveDefectError(tableau, dT_A, u);
+  const unsigned int order_contractive = tableau->nStages;
+  setContractiveDefectError(tableau, dT_A, order_contractive, u);
 }
 
 void denseOutput_GAUSS6(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
@@ -1913,7 +2002,7 @@ void getButcherTableau_GAUSS6(BUTCHER_TABLEAU* tableau)
 // TODO: Describe me
 void getButcherTableau_IMPLEULER(BUTCHER_TABLEAU* tableau)
 {
-  if (tableau->richardson) {
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     tableau->nStages = 1;
     tableau->order_b = 1;
 
@@ -2483,7 +2572,7 @@ void analyseButcherTableau(BUTCHER_TABLEAU* tableau, int nStates, unsigned int* 
     infoStreamPrint(OMC_LOG_SOLVER, 0, "Chosen RK method is explicit");
   }
 
-  if (tableau->richardson) {
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     tableau->fac = 1.0;
     tableau->order_bt = tableau->order_b + 1;
   }
@@ -2506,15 +2595,15 @@ BUTCHER_TABLEAU* initButcherTableau(enum GB_METHOD method, enum _FLAG flag)
 
   assertStreamPrint(NULL, flag==FLAG_SR_ERR || flag==FLAG_MR_ERR, "Illegal input 'flag' to initButcherTableau!");
 
-  extrapolMethod = getGBErr(flag);
-  tableau->richardson = extrapolMethod == GB_EXT_RICHARDSON;
-  if (tableau->richardson) {
+  tableau->errorEstimate = getGBErr(flag);
+  if (tableau->errorEstimate == GB_EXT_RICHARDSON) {
     infoStreamPrint(OMC_LOG_SOLVER, 0, "Richardson extrapolation is used for step size control");
   }
 
   // set optionals to default value
   tableau->t_transform = NULL;
   tableau->svp = NULL;
+  tableau->two_step = NULL;
 
   switch(method)
   {
@@ -2606,87 +2695,104 @@ BUTCHER_TABLEAU* initButcherTableau(enum GB_METHOD method, enum _FLAG flag)
       getButcherTableau_ESDIRK4_7L2SA(tableau);
       break;
     case RK_RADAU_IA_2:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IA_2(tableau);
       break;
     case RK_RADAU_IA_3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IA_3(tableau);
       break;
     case RK_RADAU_IA_4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IA_4(tableau);
       break;
     case RK_RADAU_IIA_2:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_2(tableau);
       break;
     case RK_RADAU_IIA_3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_3(tableau);
       break;
     case RK_RADAU_IIA_4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_4(tableau);
       break;
     case RK_RADAU_IIA_5:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_5(tableau);
       break;
     case RK_RADAU_IIA_6:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_6(tableau);
       break;
     case RK_RADAU_IIA_7:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_RADAU_IIA_7(tableau);
       break;
     case RK_LOBA_IIIA_3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIA_3(tableau);
       break;
     case RK_LOBA_IIIA_4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIA_4(tableau);
       break;
     case RK_LOBA_IIIB_3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIB_3(tableau);
       break;
     case RK_LOBA_IIIB_4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIB_4(tableau);
       break;
     case RK_LOBA_IIIC_3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIC_3(tableau);
       break;
     case RK_LOBA_IIIC_4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_LOBATTO_IIIC_4(tableau);
       break;
     case RK_GAUSS2:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_GAUSS2(tableau);
       break;
     case RK_GAUSS3:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_GAUSS3(tableau);
       break;
     case RK_GAUSS4:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_GAUSS4(tableau);
       break;
     case RK_GAUSS5:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_GAUSS5(tableau);
       break;
     case RK_GAUSS6:
-      if (extrapolMethod == GB_EXT_DEFAULT) tableau->richardson = TRUE;
+      if (extrapolMethod == GB_EXT_DEFAULT) tableau->errorEstimate = GB_EXT_RICHARDSON;
       getButcherTableau_GAUSS6(tableau);
       break;
     default:
       throwStreamPrint(NULL, "Error: Unknown Runge Kutta method.");
+  }
+
+  const char *nls_method = omc_flagValue[FLAG_SR_NLS];
+  modelica_boolean nls_internal = (nls_method != NULL && strcmp(nls_method, GB_NLS_METHOD_NAME[GB_NLS_INTERNAL]) == 0);
+
+  if (tableau->errorEstimate == GB_EXT_TWOSTEP && tableau->two_step == NULL)
+  {
+    throwStreamPrint(NULL, "Specified Runge-Kutta method does not support -gberr=twostep.");
+  }
+
+  if (tableau->errorEstimate == GB_EXT_CONTRACTIVE && (tableau->t_transform == NULL || tableau->t_transform->defect_err == NULL))
+  {
+    throwStreamPrint(NULL, "Specified Runge-Kutta method does not support -gberr=contractive.");
+  }
+  else if (tableau->errorEstimate == GB_EXT_CONTRACTIVE && !nls_internal)
+  {
+    throwStreamPrint(NULL, "The error measure -gberr=contractive is only supported for -gbnls=internal.");
   }
 
   return tableau;
@@ -2742,6 +2848,11 @@ void freeButcherTableau(BUTCHER_TABLEAU* tableau)
     freeStageValuePredictors(tableau->svp);
   }
 
+  if (tableau->two_step)
+  {
+    free(tableau->two_step);
+  }
+
   free(tableau);
 }
 
@@ -2782,7 +2893,7 @@ void printButcherTableau(BUTCHER_TABLEAU* tableau)
       ct += snprintf(buffer+ct, buffSize-ct, "%10g", tableau->b[j]);
     }
     infoStreamPrint(OMC_LOG_SOLVER, 0, "%s", buffer);
-    if (!tableau->richardson){
+    if (tableau->errorEstimate != GB_EXT_RICHARDSON){
       ct = snprintf(buffer, buffSize, "%10s | ", "");
       for (j = 0; j<tableau->nStages; j++) {
         ct += snprintf(buffer+ct, buffSize-ct, "%10g", tableau->bt[j]);
