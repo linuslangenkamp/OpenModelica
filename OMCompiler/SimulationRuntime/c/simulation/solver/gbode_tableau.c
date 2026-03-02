@@ -869,6 +869,18 @@ void denseOutput_Radau_IIA_2(BUTCHER_TABLEAU* tableau, double* yOld, double* x, 
   denseOutput(tableau, yOld, x, k, dt, stepSize, y, nIdx, idx, nStates);
 }
 
+// order 2, A-stable
+void twoStep_Radau_IIA_2(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
+{
+  double r2 = r * r;
+
+  beta_bar[0] = h * 5*(3*r + 2)/(4*(r + 2));
+  beta_bar[1] = h * (-3*r - 2)/(4*(r + 2));
+
+  delta_bar[0] = h_prev * -r2/(r + 2);
+  delta_bar[1] = h_prev * -r2/(r + 2);
+}
+
 /* 2-step, order 3(1), L-stable Radau IIA */
 void getButcherTableau_RADAU_IIA_2(BUTCHER_TABLEAU* tableau)
 {
@@ -910,6 +922,10 @@ void getButcherTableau_RADAU_IIA_2(BUTCHER_TABLEAU* tableau)
   };
 
   setTTransform(tableau, A_part_inv, T, T_inv, gamma, alpha, beta, FALSE, FALSE, 0, 1, NULL, NULL);
+
+  const double a = 0.05;
+  const unsigned int order_two_step = 2;
+  setTwoStepEstimator(tableau, twoStep_Radau_IIA_2, order_two_step , a);
 }
 
 void denseOutput_Radau_IIA_3(BUTCHER_TABLEAU* tableau, double* yOld, double* x, double* k, double dt, double stepSize, double* y, int nIdx, int* idx, int nStates)
