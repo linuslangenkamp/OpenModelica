@@ -1557,8 +1557,8 @@ void twoStep_Lobatto_IIIC_3(double r, double h, double h_prev, double *delta_bar
   double iq2 = 1.0 / (2*r + 2);
 
   beta_bar[0] = h * (-4*r2 + r + 1) * iq1;
-  beta_bar[1] = h * (8*r2 + 16*r + 7) * iq1;
-  beta_bar[2] = h * (-4*r2 - 5*r - 2) * iq1;
+  beta_bar[1] = h * (8*(r + 1)*(r + 1) - 1) * iq1;
+  beta_bar[2] = h * (-(r + 1)*(4*r + 1) - 1) * iq1;
 
   delta_bar[0] = 0;
   delta_bar[1] = h_prev * -r2 * iq2;
