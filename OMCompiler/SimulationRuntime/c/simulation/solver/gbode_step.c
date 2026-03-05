@@ -487,9 +487,23 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
         printVector_gb(OMC_LOG_GBODE_NLS, "xL", nlsData->nlsx,              nFastStates, gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize);
         messageClose(OMC_LOG_GBODE_NLS);
       }
+
+      if (/* non explicit stage of (E)SDIRK integrator */ (stage_ != 0 || gbfData->tableau->A[0] != 0) && gbData->nlsSolverMethod == GB_NLS_INTERNAL)
+      {
+        // reconstruct k_{stage_} from the solution, avoids repeated call to functionODE()
+        double ifac = 1.0 / (gbfData->stepSize * gbfData->tableau->A[stage_ * nStages + stage_]);
+        for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
+        {
+          int slow_idx = gbData->fastStatesIdx[fast_idx];
+          fODE[slow_idx] = ifac * (nlsData->nlsx[fast_idx] - gbfData->res_const[slow_idx]);
+          sData->realVars[slow_idx] = nlsData->nlsx[fast_idx];
+        }
+      }
     }
 
     // copy last values of sData->realVars and fODE, which should coincide with x[i] and k[i]
+
+    // TODO: WTF! Why do the fast states even need all values of x and k????
     memcpy(gbfData->x + stage_ * nStates, sData->realVars, nStates*sizeof(double));
     memcpy(gbfData->k + stage_ * nStates, fODE, nStates*sizeof(double));
   }
