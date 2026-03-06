@@ -472,6 +472,29 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
       extrapolation_gbf(gbData, gbData->y1, gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize);
       projVector_gbf(nlsData->nlsxExtrapolation, gbData->y1, nFastStates, gbData->fastStatesIdx);
 
+      // is the last solution valid and do we use internal nls
+      modelica_boolean dense_output_valid = (gbfData->extrapolationValid && gbfData->nlsSolverMethod == GB_NLS_INTERNAL);
+
+      if (gbfData->tableau->svp != NULL && gbfData->tableau->svp->type[stage_] == SVP_LINEAR_COMBINATION)
+      {
+        /* linear combination stage-value-predictors (highest priority) */
+        gbInternalLinearCombinationSVP(gbfData->tableau->svp, stage_, nFastStates, gbfData->stepSize, gbfData->kCurrPacked, gbfData->yOldPacked, nlsData->nlsxOld);
+      }
+      else if (dense_output_valid && gbfData->tableau->svp != NULL && gbfData->tableau->svp->type[stage_] == SVP_DENSE_OUTPUT)
+      {
+        /* dense output stage-value-predictor */
+        double theta = (gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize - gbfData->extrapolationBaseTime) / gbfData->extrapolationStepSize;
+        gbfData->tableau->svp->dense_output_predictor(gbfData->tableau, gbfData->yLast, NULL, gbfData->kLast,
+                                                      theta, gbfData->extrapolationStepSize, nlsData->nlsxOld, 0, NULL, nFastStates);
+      }
+      else if (dense_output_valid && gbfData->tableau->withDenseOutput)
+      {
+        /* standard dense output if available / possible */
+        double theta = (gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize - gbfData->extrapolationBaseTime) / gbfData->extrapolationStepSize;
+        gbfData->tableau->dense_output(gbfData->tableau, gbfData->yLast, NULL, gbfData->kLast,
+                                       theta, gbfData->extrapolationStepSize, nlsData->nlsxOld, 0, NULL, nFastStates);
+      }
+
       infoStreamPrint(OMC_LOG_GBODE_NLS_V, 0, "Solving NLS of gbf stage %d at time %g", stage_+1, gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize);
       solved = solveNLS_gb(data, threadData, nlsData, gbData);
 
@@ -487,9 +510,42 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
         printVector_gb(OMC_LOG_GBODE_NLS, "xL", nlsData->nlsx,              nFastStates, gbfData->time + gbfData->tableau->c[stage_] * gbfData->stepSize);
         messageClose(OMC_LOG_GBODE_NLS);
       }
+
+      if (/* non explicit stage of (E)SDIRK integrator */ (stage_ != 0 || gbfData->tableau->A[0] != 0) && gbData->nlsSolverMethod == GB_NLS_INTERNAL)
+      {
+        // reconstruct k_{stage_} from the solution, avoids repeated call to functionODE()
+        double ifac = 1.0 / (gbfData->stepSize * gbfData->tableau->A[stage_ * nStages + stage_]);
+        for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
+        {
+          int slow_idx = gbData->fastStatesIdx[fast_idx];
+          fODE[slow_idx] = ifac * (nlsData->nlsx[fast_idx] - gbfData->res_const[slow_idx]);
+          sData->realVars[slow_idx] = nlsData->nlsx[fast_idx];
+        }
+      }
+    }
+
+    // TODO: get rid of this madness and make k and y only contain fast states!!
+    if (stage_ == 0 && gbfData->nlsSolverMethod == GB_NLS_INTERNAL)
+    {
+      for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
+      {
+        int slow_idx = gbData->fastStatesIdx[fast_idx];
+        gbfData->yOldPacked[fast_idx] = gbfData->yOld[slow_idx];
+      }
+    }
+
+    // TODO: get rid of this madness and make k and y only contain fast states!!
+    if (gbfData->nlsSolverMethod == GB_NLS_INTERNAL)
+    {
+      for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
+      {
+        int slow_idx = gbData->fastStatesIdx[fast_idx];
+        gbfData->kCurrPacked[nFastStates * stage_ + fast_idx] = fODE[slow_idx];
+      }
     }
 
     // copy last values of sData->realVars and fODE, which should coincide with x[i] and k[i]
+    // TODO: WTF! Why do the fast states even need all values of x and k????
     memcpy(gbfData->x + stage_ * nStates, sData->realVars, nStates*sizeof(double));
     memcpy(gbfData->k + stage_ * nStates, fODE, nStates*sizeof(double));
   }
