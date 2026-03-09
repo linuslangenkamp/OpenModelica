@@ -414,12 +414,17 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
   int nStages = gbfData->tableau->nStages;
   NLS_SOLVER_STATUS solved = NLS_FAILED;
 
+  // if we have we have many slow states, e.g. 90% slow and 10% fast: always interpolate all slow states
+  // as we can we heavily exploit BLAS vectorization; only use sparse indirect indexing for tiny slow sets (< 20%)
+  modelica_boolean use_sparse_slow_interp = ((double)gbData->nSlowStates / (double)gbData->nStates < 0.2);
+
   // interpolate the slow states on the current time of gbfData->yOld for correct evaluation of gbfData->res_const
   gb_interpolation(gbData->interpolation,
                    gbData->timeLeft,   gbData->yLeft,  gbData->kLeft,
                    gbData->timeRight,  gbData->yRight, gbData->kRight,
                    gbfData->time,      gbfData->yOld,
-                   gbData->nSlowStates, gbData->slowStatesIdx, nStates, gbData->tableau, gbData->x, gbData->k);
+                   use_sparse_slow_interp ? gbData->nSlowStates : 0, use_sparse_slow_interp ? gbData->slowStatesIdx : NULL,
+                   nStates, gbData->tableau, gbData->x, gbData->k);
 
   if (OMC_ACTIVE_STREAM(OMC_LOG_GBODE_NLS)) {
     infoStreamPrint(OMC_LOG_GBODE_NLS, 1, "NLS - used values for extrapolation:");
@@ -459,7 +464,8 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
                        gbData->timeLeft,  gbData->yLeft,  gbData->kLeft,
                        gbData->timeRight, gbData->yRight, gbData->kRight,
                        sData->timeValue,   sData->realVars,
-                       gbData->nSlowStates, gbData->slowStatesIdx, nStates, gbData->tableau, gbData->x, gbData->k);
+                       use_sparse_slow_interp ? gbData->nSlowStates : 0, use_sparse_slow_interp ? gbData->slowStatesIdx : NULL,
+                       nStates, gbData->tableau, gbData->x, gbData->k);
 
       // setting the start vector for the newton step
       // solve for x: 0 = yold-x + h*(sum(A[i,j]*k[j], i=1..j-1) + A[i,i]*f(t + c[i]*h, x))
@@ -524,28 +530,23 @@ int expl_diag_impl_RK_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solv
       }
     }
 
-    // TODO: get rid of this madness and make k and y only contain fast states!!
-    if (stage_ == 0 && gbfData->nlsSolverMethod == GB_NLS_INTERNAL)
-    {
-      for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
-      {
-        int slow_idx = gbData->fastStatesIdx[fast_idx];
-        gbfData->yOldPacked[fast_idx] = gbfData->yOld[slow_idx];
-      }
-    }
-
-    // TODO: get rid of this madness and make k and y only contain fast states!!
+    // TODO: get rid of this auxiliary stuff and make k and y only contain fast states!!
     if (gbfData->nlsSolverMethod == GB_NLS_INTERNAL)
     {
-      for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)
+      int stageOffset = nFastStates * stage_;
+
+      for (int fast_idx = 0; fast_idx < nFastStates; ++fast_idx)
       {
         int slow_idx = gbData->fastStatesIdx[fast_idx];
-        gbfData->kCurrPacked[nFastStates * stage_ + fast_idx] = fODE[slow_idx];
+
+        if (stage_ == 0) gbfData->yOldPacked[fast_idx] = gbfData->yOld[slow_idx];
+        gbfData->kCurrPacked[stageOffset + fast_idx] = fODE[slow_idx];
       }
     }
 
     // copy last values of sData->realVars and fODE, which should coincide with x[i] and k[i]
-    // TODO: WTF! Why do the fast states even need all values of x and k????
+    // TODO: Make the fast state structures only contains the current flat k's
+    //       => change the interpolation routines accordingly
     memcpy(gbfData->x + stage_ * nStates, sData->realVars, nStates*sizeof(double));
     memcpy(gbfData->k + stage_ * nStates, fODE, nStates*sizeof(double));
   }
