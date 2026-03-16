@@ -36,7 +36,6 @@
 
 #include "../arrayIndex.h"
 
-// TODO: How to choose TOL for Richardson??
 // TODO: Calibrate safety factor for internal tolerances
 
 /* some constants for less verbose BLAS calls */
