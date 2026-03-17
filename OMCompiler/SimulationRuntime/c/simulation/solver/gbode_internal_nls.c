@@ -38,6 +38,8 @@
 
 // TODO: Calibrate safety factor for internal tolerances
 
+#define MAX(a,b) (((a)>(b))?(a):(b))
+
 /* some constants for less verbose BLAS calls */
 static const double DBL_ZERO = 0.0;
 static const double DBL_ONE = 1.0;
@@ -1572,7 +1574,7 @@ void *gbInternalNlsAllocate(int size,
     nls->W = (double *) malloc(nls->size * trfm->size * sizeof(double));
 
     // auxiliary memory
-    nls->work = (double *) malloc(nls->size * fmax(trfm->size, 4) * sizeof(double));
+    nls->work = (double *) malloc(nls->size * MAX(trfm->size, 4) * sizeof(double));
   }
 
   return (void *) nls;
