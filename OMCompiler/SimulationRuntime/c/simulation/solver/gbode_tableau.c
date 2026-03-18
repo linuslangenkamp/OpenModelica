@@ -1314,14 +1314,17 @@ void denseOutput_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau, double* yOld, double* 
 // order 3
 void twoStep_Lobatto_IIIA_3(double r, double h, double h_prev, double *delta_bar, double *beta_bar)
 {
-  beta_bar[0] = h * 5./6.;
-  beta_bar[1] = h * 4./3.;
-  beta_bar[2] = h * -1./6.;
+  double r2  = r * r;
+  double inv = 1.0 / (r + 2.0);
+  double tr  = 2.0 * r + 1.0;
 
-  double r_div_3 = r / 3.;
-  delta_bar[0] = h_prev * r_div_3;
-  delta_bar[1] = h_prev * -2. * r_div_3;
-  delta_bar[2] = h_prev * -2. * r_div_3;
+  beta_bar[0] =  h * (5.0/6.0) * tr * inv;
+  beta_bar[1] =  h * (4.0/3.0) * tr * inv;
+  beta_bar[2] = -h * (1.0/6.0) * tr * inv;
+
+  delta_bar[0] =  h_prev * r2 * (r + 1.0) * 0.5 * inv;
+  delta_bar[1] = -h_prev * r2 * 2.0 * inv;
+  delta_bar[2] = -h_prev * r2 * (r + 3.0) * 0.5 * inv;
 }
 
 // TODO: Describe me
@@ -1375,7 +1378,7 @@ void getButcherTableau_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau)
 
   setTTransform(tableau, A_part_inv, T, T_inv, gamma, alpha, beta, TRUE, FALSE, 0, 1, phi, rho);
 
-  const double a = 0.1;
+  const double a = 0.01;
   const unsigned int order_two_step = 3;
   setTwoStepEstimator(tableau, twoStep_Lobatto_IIIA_3, order_two_step, a);
 }
