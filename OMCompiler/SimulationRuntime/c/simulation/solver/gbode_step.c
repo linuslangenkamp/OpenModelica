@@ -392,6 +392,18 @@ int expl_diag_impl_RK(DATA* data, threadData_t* threadData, SOLVER_INFO* solverI
     }
   }
 
+  for (i = 0; i<nStates; i++)
+  {
+    gbData->yt[i] -= gbData->y[i];
+  }
+
+  gbInternalContractionFilter(gbData->nlsData, gbData->yt);
+
+  for (i = 0; i<nStates; i++)
+  {
+    gbData->yt[i] += gbData->y[i];
+  }
+
   return 0;
 }
 

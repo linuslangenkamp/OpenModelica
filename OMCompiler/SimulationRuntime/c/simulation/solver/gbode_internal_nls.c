@@ -1940,6 +1940,16 @@ void gbInternalContraction(DATA *data,
   gbInternal_dKLU_solve(&nls->klu_internals_real[0], size, err);
 }
 
+void gbInternalContractionFilter(NONLINEAR_SYSTEM_DATA *nonlinsys,
+                                 double *err)
+{
+  GB_INTERNAL_NLS_DATA *nls = (GB_INTERNAL_NLS_DATA *) (((struct dataSolver *)nonlinsys->solverData)->ordinaryData);
+  BUTCHER_TABLEAU *tabl = nls->tabl;
+  int size = nls->size;
+
+  gbInternal_dKLU_solve(&nls->klu_internals_real[0], size, err);
+}
+
 // returns a work pointer of at least 32 * N_STATES bytes == 4 * N_STATES * sizeof(double)
 double *gbInternalGetWorkPointer(void *nls_ptr)
 {

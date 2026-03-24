@@ -72,6 +72,9 @@ void gbInternalContraction(DATA *data,
                            DATA_GBODE *gbData,
                            double *err);
 
+void gbInternalContractionFilter(NONLINEAR_SYSTEM_DATA *nonlinsys,
+                                 double *err);
+
 void gbInternalLinearCombinationSVP(STAGE_VALUE_PREDICTORS *svp,
                                     int active_stage,
                                     int nStates,
