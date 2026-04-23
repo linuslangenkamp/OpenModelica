@@ -1601,13 +1601,14 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
       }
 
       err = sqrt(err / (double) nStates);
+      //infoStreamPrint(OMC_LOG_STDOUT, 0, "All State Error (RMS): %e", err);
 
       if (gbData->multi_rate) {
         // Multi-rate integration enabled:
 
         // Calculate the error threshold for slow states (used to separate slow and fast states).
-        err_states = getErrorThreshold(gbData);
-        err = err_states;
+        // err_states = getErrorThreshold(gbData);
+        //infoStreamPrint(OMC_LOG_STDOUT, 0, "Slow State Threshold: %e", err_states);
 
         // Classify states into fast and slow based on the scaled error:
         // - States with error >= 1 are considered fast.
@@ -1632,6 +1633,26 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
             gbData->err_slow = fmax(gbData->err_slow, gbData->err[i]);
           }
         }
+
+        if ((double) gbData->nFastStates > (double) gbData->nStates * gbData->percentage)
+        {
+          err = 10.;
+        }
+        else
+        {
+          // err = 0.0;
+          // for (int slow_idx = 0; slow_idx < gbData->nSlowStates; slow_idx++)
+          // {
+          //   int full_idx = gbData->slowStatesIdx[slow_idx];
+          //   err += gbData->err[full_idx] * gbData->err[full_idx];
+          // }
+          // err = sqrt(err / (double) gbData->nSlowStates);
+
+          err = gbData->err_slow;
+        }
+
+        //infoStreamPrint(OMC_LOG_STDOUT, 0, "Controller-Slow State Error (RMS): %e", err);
+        //infoStreamPrint(OMC_LOG_STDOUT, 0, "nSlow = %d, nFast = %d, ratio = %f", gbData->nSlowStates, gbData->nFastStates, (double)gbData->nFastStates / (double) gbData->nStates);
       }
 
       // Reject the current integration step if the estimated error exceeds the tolerance,
@@ -1660,7 +1681,7 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
             dumpFastStates_gb(gbData, FALSE, gbData->time + gbData->stepSize, 1);
           }
         } else {
-          // For single-rate integration, print basic rejection info with the error and new step size.
+          // For single-rate integration, prinerr_statest basic rejection info with the error and new step size.
           infoStreamPrint(OMC_LOG_SOLVER, 0,
             "Reject step from %.16g to %.16g, error %.16g, new stepsize %.16g",
             gbData->time, gbData->time + gbData->stepSize, err, gbData->stepSize * 0.5);
