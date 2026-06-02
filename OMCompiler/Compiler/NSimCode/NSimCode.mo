@@ -305,6 +305,8 @@ public
           UnorderedMap<Absyn.Path, Function> funcMap;
           VariablePointers residual_vars;
           SimVars vars;
+          SimVar simvar;
+          ComponentRef cref;
           // old SimCode strcutures
           Absyn.Program program;
           list<String> libs, includeDirs, libPaths;
@@ -350,6 +352,12 @@ public
             (vars, simCodeIndices)              := SimVars.create(varData, residual_vars, simCodeIndices);
             (extObjInfo, vars, simCodeIndices)  := ExtObjInfo.create(varData.external_objects, vars, simCodeIndices);
             simcode_map                         := SimCodeUtil.createSimCodeMap(vars, extObjInfo);
+
+            print("SimCode Map: \n");
+            for tpl in UnorderedMap.toList(simcode_map) loop
+              (cref, simvar) := tpl;
+              print("\t" + ComponentRef.toString(cref) + " -> " + SimVar.toString(simvar) + "\n");
+            end for;
 
             // create empty equation map and fill while creating the blocks
             equation_map := UnorderedMap.new<SimStrongComponent.Block>(ComponentRef.hash, ComponentRef.isEqual);

@@ -357,6 +357,16 @@ protected
         vars_lst := list(BVariable.getVarName(Slice.getT(var)) for var guard varFunc(Slice.getT(var), init) in strict.iteration_vars);
         eqns_lst := list(Equation.getEqnName(Slice.getT(eqn)) for eqn guard eqnFunc(Slice.getT(eqn)) in strict.residual_eqns);
 
+        for cref in vars_lst loop
+          print("Var: " + ComponentRef.toString(cref) + ", ");
+        end for;
+
+        for cref in eqns_lst loop
+          print("Eqn: " + ComponentRef.toString(cref) + ", ");
+        end for;
+
+        print("\n");
+
         // the set of all loop variables used to determine solvability
         vars_set := UnorderedSet.fromList(vars_lst, ComponentRef.hash, ComponentRef.isEqual);
 
@@ -367,6 +377,7 @@ protected
         // refine the adjacency matrix by updating solvability information
         full := Adjacency.Matrix.refine(full, funcMap, v, e, variables, equations, vars_set, Partition.kindIsInitial(kind));
         comp.linear := checkLinearity(full, v, e);
+        print("IsLinear? -> " + boolString(comp.linear) + "\n" + StrongComponent.toString(comp) + "\n\n");
       then (comp, full, index);
       else (comp, full, index);
     end match;
