@@ -176,6 +176,7 @@ public
     input Option<Adjacency.Matrix> full;
     input UnorderedMap<Path, Function> funcMap;
     input String name;
+    input JacobianType jacType;
     input Boolean staticAsContinuous;
     output Option<Jacobian> jacobian;
   protected
@@ -185,7 +186,7 @@ public
   algorithm
     jacobian := func(
         name                = name,
-        jacType             = JacobianType.NLS,
+        jacType             = jacType,
         seedCandidates      = seedCandidates,
         partialCandidates   = partialCandidates,
         equations           = equations,
@@ -487,7 +488,7 @@ public
           // create row-wise sparsity pattern
           for cref in listReverse(partial_vars) loop
             // only create rows for derivatives
-            if jacType == JacobianType.NLS or isRowInJacobian(cref, jacType) then
+            if jacType == JacobianType.NLS or jacType == JacobianType.LS or isRowInJacobian(cref, jacType) then
               if UnorderedMap.contains(cref, map) then
                 tmp := UnorderedSet.unique_list(UnorderedMap.getOrFail(cref, map), ComponentRef.hash, ComponentRef.isEqual);
                 rows := (cref, tmp) :: rows;
@@ -504,7 +505,7 @@ public
           // create column-wise sparsity pattern
           for cref in listReverse(seed_vars) loop
             // TODO: check this condition for Optimization
-            if (jacType == JacobianType.NLS or BVariable.checkCref(cref, BVariable.isState, sourceInfo())
+            if (jacType == JacobianType.NLS or jacType == JacobianType.LS or BVariable.checkCref(cref, BVariable.isState, sourceInfo())
                 or (jacType == JacobianType.OPT_LFG or jacType == JacobianType.OPT_MRF or jacType == JacobianType.OPT_R0)) then
               tmp := UnorderedSet.unique_list(UnorderedMap.getSafe(cref, map, sourceInfo()), ComponentRef.hash, ComponentRef.isEqual);
               cols := (cref, tmp) :: cols;
@@ -626,7 +627,7 @@ public
       // create index -> cref arrays
       seeds := listArray(sparsityPattern.seed_vars);
 
-      if jacType == JacobianType.NLS then
+      if jacType == JacobianType.NLS or jacType == JacobianType.LS then
         partials := listArray(sparsityPattern.partial_vars);
       else
         partials := listArray(list(cref for cref guard(isRowInJacobian(cref, jacType)) in sparsityPattern.partial_vars));
@@ -1069,6 +1070,7 @@ protected
     list<StrongComponent> residual_comps;
     list<VariablePointer> seed_candidates, residual_vars, inner_vars;
     constant Boolean staticAsContinuous = Partition.kindIsInitial(kind);
+    JacobianType jacType;
   algorithm
     (comp, updated) := match comp
       case StrongComponent.ALGEBRAIC_LOOP(strict = strict) algorithm
@@ -1079,6 +1081,7 @@ protected
         seed_candidates := list(Slice.getT(var) for var in strict.iteration_vars);
         residual_vars   := list(Equation.getResidualVar(Slice.getT(eqn)) for eqn in strict.residual_eqns);
         inner_vars      := listAppend(list(var for var guard(BVariable.isContinuous(var, staticAsContinuous)) in StrongComponent.getVariables(comp)) for comp in strict.innerEquations);
+        jacType         := if comp.linear then JacobianType.LS else JacobianType.NLS;
 
         // update jacobian to take slices (just to have correct inner variables and such)
         strict.jac := nonlinear(
@@ -1088,7 +1091,8 @@ protected
           comps              = Array.appendList(strict.innerEquations, residual_comps),
           full               = full,
           funcMap            = funcMap,
-          name               = Partition.Partition.kindToString(kind) + (if comp.linear then "_LS_JAC_" else "_NLS_JAC_") + intString(comp.idx),
+          name               = Partition.Partition.kindToString(kind) + "_" + jacobianTypeName(jacType) + "_JAC_" + intString(comp.idx),
+          jacType            = jacType,
           staticAsContinuous = staticAsContinuous);
         comp.strict := strict;
 
@@ -1233,6 +1237,7 @@ protected
           full               = SOME(Adjacency.Matrix.EMPTY(MatrixStrictness.LINEAR)),
           funcMap            = funcMap,
           name               = name,
+          jacType            = JacobianType.LS,
           staticAsContinuous = staticAsContinuous
         );
         comp.strict := strict;
