@@ -68,6 +68,14 @@
 
 extern void communicateStatus(const char *phase, double completionPercent, double currentTime, double currentStepSize);
 
+static void gbodeInvalidateInternalPreconditioner(DATA_GBODE *gbData)
+{
+  if (gbData->nlsSolverMethod == GB_NLS_INTERNAL && gbData->nlsData && gbData->nlsData->solverData)
+  {
+    gbInternalInvalidatePreconditioner(((struct dataSolver *)gbData->nlsData->solverData)->ordinaryData);
+  }
+}
+
 // TODO: we should add proper return handling of callbacks: ODE, Jacobian, Zero-Crossings, etc.
 // TODO: make the interface between fast steps and slow steps more clear: It would be best to have one central function, which
 //       copies the required fields from fast -> slow
@@ -385,6 +393,7 @@ int gbode_allocateData(DATA *data, threadData_t *threadData, SOLVER_INFO *solver
   gbData->ctrl_method = getControllerMethod(FLAG_SR_CTRL);
   use_fhr = omc_flag[FLAG_SR_CTRL_FHR];
   use_filter = getGBCtrlFilterValue();
+  initGBCtrlDeadzone();
 
    /* define maximum step size gbode is allowed to go */
   if (omc_flag[FLAG_MAX_STEP_SIZE]) {
@@ -1553,6 +1562,7 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
       //
       // If none of the abort conditions occur, the loop continues to retry with the reduced step size.
       if (gb_step_info != 0) {
+        gbodeInvalidateInternalPreconditioner(gbData);
         gbData->stats.nConvergenceTestFailures++;
         if (OMC_ACTIVE_STREAM(OMC_LOG_SOLVER)) infoStreamPrint(OMC_LOG_SOLVER, 0, "gbode_main: Failed to calculate step at time = %5g with step size h = %5g.", gbData->time, gbData->stepSize);
         if (gbData->ctrl_method == GB_CTRL_CNST) {
@@ -1665,6 +1675,7 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
 
         // Increment the counter for error test failures.
         gbData->stats.nErrorTestFailures++;
+        gbodeInvalidateInternalPreconditioner(gbData);
 
         if (gbData->eventHappened)
         {

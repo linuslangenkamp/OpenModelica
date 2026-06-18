@@ -153,6 +153,7 @@ const char *FLAG_NAME[FLAG_MAX+1] = {
   /* FLAG_SR_NLS */                       "gbnls",
   /* FLAG_SR_NLS_INTERNAL_DAMPING_FAC */  "gbnls_internal_damping",
   /* FLAG_SR_NLS_INTERNAL_JACKEEP */      "gbnls_internal_jackeep",
+  /* FLAG_SR_NLS_INTERNAL_LINSOLVER */    "gbnls_internal_linsolver",
   /* FLAG_MR */                           "gbfm",
   /* FLAG_MR_CTRL */                      "gbfctrl",
   /* FLAG_MR_ERR */                       "gbferr",
@@ -184,6 +185,8 @@ const char *FLAG_NAME[FLAG_MAX+1] = {
   /* FLAG_PARMOD_DUMP_TASKGRAPH */        "parmodDumpTaskGraph",
   /* FLAG_PARMOD_IMPORT_CLUSTERING */     "parmodImportClustering",
   /* FLAG_PARMOD_DUMP_STAGES */           "parmodDumpStages",
+  /* FLAG_SR_CTRL_DEADZONE */             "gbctrl_deadzone",
+  /* FLAG_SR_NLS_INTERNAL_PRECONDITIONER */ "gbnls_internal_pc",
 
   "FLAG_MAX"
 };
@@ -314,6 +317,7 @@ const char *FLAG_DESC[FLAG_MAX+1] = {
   /* FLAG_SR_NLS */                       "Non-linear solver method of solver gbode (single-rate, slow states integrator)",
   /* FLAG_SR_NLS_INTERNAL_DAMPING_FAC */  "Value specifies damping applied to the estimated convergence rate in the first Newton iteration (0 <= value <= 1). Only valid for -gbnls=internal.",
   /* FLAG_SR_NLS_INTERNAL_JACKEEP */      "Value specifies how often the ODE Jacobian is recalculated (0 <= value < 1). Only valid for -gbnls=internal.",
+  /* FLAG_SR_NLS_INTERNAL_LINSOLVER */    "Linear solver backend for the internal GBODE non-linear solver.",
   /* FLAG_MR */                           "Value specifies the chosen solver of solver gbode (multi-rate, fast states integrator)",
   /* FLAG_MR_CTRL */                      "Step size control of solver gbode (multi-rate, fast states integrator)",
   /* FLAG_MR_ERR */                       "Error estimation method for gbode solver (multi-rate, fast states integrator).",
@@ -345,6 +349,8 @@ const char *FLAG_DESC[FLAG_MAX+1] = {
   /* FLAG_PARMOD_DUMP_TASKGRAPH */        "value specifies a json file to which the parmodauto task graph and clustering are exported",
   /* FLAG_PARMOD_IMPORT_CLUSTERING */     "value specifies a json file from which a parmodauto clustering is imported instead of computing one",
   /* FLAG_PARMOD_DUMP_STAGES */           "value specifies a file name prefix to which the parmodauto task graph and clustering are exported before and after each clustering optimization",
+  /* FLAG_SR_CTRL_DEADZONE */             "Enable or disable the GBODE step-size deadzone for small controller changes. Possible values are on and off (default on).",
+  /* FLAG_SR_NLS_INTERNAL_PRECONDITIONER */ "Preconditioner for the internal GBODE Krylov linear solver. Possible values are none and jacobi.",
 
   "FLAG_MAX"
 };
@@ -667,6 +673,9 @@ const char *FLAG_DETAILED_DESC[FLAG_MAX+1] = {
   /* FLAG_SR_NLS_INTERNAL_JACKEEP */
   "  Value specifies how often the ODE Jacobian is recalculated (0 <= value < 1). Only valid for -gbnls=internal.\n"
   "  The Jacobian is kept, if the linear convergence rate || dz_k || / || dz_{k-1} || of the Newton iteration is smaller than the specified value. Small values result in more Jacobian callbacks.",
+  /* FLAG_SR_NLS_INTERNAL_LINSOLVER */
+  "  Linear solver backend for the internal GBODE non-linear solver. Possible values are klu and gmres.\n"
+  "  gmres is a matrix-free prototype for single-rate ESDIRK methods with symbolic Jacobian-vector products; unsupported methods fail clearly.",
   /* FLAG_MR */
   "  Value specifies the chosen solver of solver gbode (multi-rate, fast states integrator).\n"
   "  Current Restriction: Fully implicit (Gauss, Radau, Lobatto) RK methods are not supported, yet.",
@@ -735,6 +744,11 @@ const char *FLAG_DETAILED_DESC[FLAG_MAX+1] = {
   "  Imports a clustering (groups of equation indices) from the given json file instead of computing one. The simulation aborts if the clustering is invalid (forms a cycle or references unknown equations).",
   /* FLAG_PARMOD_DUMP_STAGES */
   "  Exports the parmodauto task graph and clustering before and after each clustering optimization to a series of json files named <prefix>.NN.<stage>.json, so the effect of each optimization can be inspected.",
+  /* FLAG_SR_CTRL_DEADZONE */
+  "  Enable or disable the GBODE step-size deadzone for small controller changes. Possible values are on and off (default on).",
+  /* FLAG_SR_NLS_INTERNAL_PRECONDITIONER */
+  "  Preconditioner for the internal GBODE Krylov linear solver. Possible values are none and jacobi.\n"
+  "  The jacobi preconditioner is built on first use and reused until an event, nonlinear failure, or rejected step invalidates it.",
 
 
   "FLAG_MAX"
@@ -866,6 +880,7 @@ const flag_repeat_policy FLAG_REPEAT_POLICIES[FLAG_MAX] = {
   /* FLAG_SR_NLS */                       FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_SR_NLS_INTERNAL_DAMPING_FAC */  FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_SR_NLS_INTERNAL_JACKEEP */      FLAG_REPEAT_POLICY_FORBID,
+  /* FLAG_SR_NLS_INTERNAL_LINSOLVER */    FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_MR */                           FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_MR_CTRL */                      FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_MR_ERR */                       FLAG_REPEAT_POLICY_FORBID,
@@ -897,6 +912,8 @@ const flag_repeat_policy FLAG_REPEAT_POLICIES[FLAG_MAX] = {
   /* FLAG_PARMOD_DUMP_TASKGRAPH */        FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_PARMOD_IMPORT_CLUSTERING */     FLAG_REPEAT_POLICY_FORBID,
   /* FLAG_PARMOD_DUMP_STAGES */           FLAG_REPEAT_POLICY_FORBID,
+  /* FLAG_SR_CTRL_DEADZONE */             FLAG_REPEAT_POLICY_FORBID,
+  /* FLAG_SR_NLS_INTERNAL_PRECONDITIONER */ FLAG_REPEAT_POLICY_FORBID,
 };
 
 
@@ -1026,6 +1043,7 @@ const int FLAG_TYPE[FLAG_MAX] = {
   /* FLAG_SR_NLS */                       FLAG_TYPE_OPTION,
   /* FLAG_SR_NLS_INTERNAL_DAMPING_FAC */  FLAG_TYPE_OPTION,
   /* FLAG_SR_NLS_INTERNAL_JACKEEP */      FLAG_TYPE_OPTION,
+  /* FLAG_SR_NLS_INTERNAL_LINSOLVER */    FLAG_TYPE_OPTION,
   /* FLAG_MR */                           FLAG_TYPE_OPTION,
   /* FLAG_MR_CTRL */                      FLAG_TYPE_OPTION,
   /* FLAG_MR_ERR */                       FLAG_TYPE_OPTION,
@@ -1057,6 +1075,8 @@ const int FLAG_TYPE[FLAG_MAX] = {
   /* FLAG_PARMOD_DUMP_TASKGRAPH */        FLAG_TYPE_OPTION,
   /* FLAG_PARMOD_IMPORT_CLUSTERING */     FLAG_TYPE_OPTION,
   /* FLAG_PARMOD_DUMP_STAGES */           FLAG_TYPE_OPTION,
+  /* FLAG_SR_CTRL_DEADZONE */             FLAG_TYPE_OPTION,
+  /* FLAG_SR_NLS_INTERNAL_PRECONDITIONER */ FLAG_TYPE_OPTION,
 };
 
 const char *GB_METHOD_NAME[RK_MAX] = {
@@ -1274,7 +1294,7 @@ const char *SOLVER_METHOD_DESC[S_MAX] = {
   /* S_DASSL */         "dassl (default) - BDF method - implicit (dense solver), variable step size control, adaptive order 1-5, event location",
   /* S_IDA */           "ida - SUNDIALS IDA solver - BDF method - implicit (sparse/dense solver, default sparse) variable step size control, adaptive order 1-5, event location - additional simulation flags: -idaMaxErrorTestFails -idaMaxNonLinIters -idaMaxConvFails -idaNonLinConvCoef -idaLS -idaScaling -idaSensitivity",
   /* S_CVODE */         "cvode - SUNDIALS CVODE solver - BDF or Adams-Moulton solver - implicit (dense solver), variable step-size control, adaptive order 1-12, event location - additional simulation flags -cvodeLinearMultistepMethod -cvodeNonlinearSolverIteration",
-  /* S_GBODE */         "gbode - generic Runge-Kutta ODE solver - implicit (sparse solver)/explicit, fixed/variable step size control, order 1-14, event location, optional bi-rate integration - additional simulation flags -gbm -gbctrl -gbratio - additional advanced flags -gbctrl_filter -gbctrl_fhr -gberr -gbint -gbnls -gbfm -gbfctrl -gbferr -gbfint -gbfnls",
+  /* S_GBODE */         "gbode - generic Runge-Kutta ODE solver - implicit (sparse solver)/explicit, fixed/variable step size control, order 1-14, event location, optional bi-rate integration - additional simulation flags -gbm -gbctrl -gbratio - additional advanced flags -gbctrl_filter -gbctrl_fhr -gbctrl_deadzone -gberr -gbint -gbnls -gbfm -gbfctrl -gbferr -gbfint -gbfnls",
   /* S_EULER */         "euler - explicit Euler, fixed step size, order 1",
   /* S_RUNGEKUTTA */    "rungekutta - classical Runge-Kutta - explicit, fixed step, order 4",
   /* S_SYM_SOLVER */    "symSolver - symbolic inline Solver [compiler flag '--symSolver' needed] - fixed step size, order 1",

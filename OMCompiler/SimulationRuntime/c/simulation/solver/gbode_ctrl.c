@@ -34,6 +34,51 @@
 
 unsigned int use_fhr = FALSE;
 double use_filter = 1.0;
+static unsigned int use_deadzone = TRUE;
+
+static int gbctrlStringEqualsIgnoreCase(const char *a, const char *b)
+{
+  while (*a && *b)
+  {
+    char ca = *a++;
+    char cb = *b++;
+
+    if (ca >= 'A' && ca <= 'Z') ca = (char) (ca - 'A' + 'a');
+    if (cb >= 'A' && cb <= 'Z') cb = (char) (cb - 'A' + 'a');
+    if (ca != cb) return FALSE;
+  }
+
+  return *a == '\0' && *b == '\0';
+}
+
+void initGBCtrlDeadzone(void)
+{
+  const char *value = omc_flagValue[FLAG_SR_CTRL_DEADZONE];
+  if (!omc_flag[FLAG_SR_CTRL_DEADZONE] || value == NULL)
+  {
+    use_deadzone = TRUE;
+    return;
+  }
+
+  if (gbctrlStringEqualsIgnoreCase(value, "on") ||
+      gbctrlStringEqualsIgnoreCase(value, "true") ||
+      gbctrlStringEqualsIgnoreCase(value, "1"))
+  {
+    use_deadzone = TRUE;
+    return;
+  }
+
+  if (gbctrlStringEqualsIgnoreCase(value, "off") ||
+      gbctrlStringEqualsIgnoreCase(value, "false") ||
+      gbctrlStringEqualsIgnoreCase(value, "0"))
+  {
+    use_deadzone = FALSE;
+    return;
+  }
+
+  throwStreamPrint(NULL, "Flag -gbctrl_deadzone must be on or off, but %s was given.", value);
+  use_deadzone = TRUE;
+}
 
 static inline void swap(int *a, int *b)
 {
@@ -403,7 +448,7 @@ double GenericController(double* err_values, double* step_values, unsigned int e
   h_fac *= fac;
 
   // Keep step size constant, if there are only small changes
-  if ((0.99 < h_fac) && (h_fac < 1.2)) {
+  if (use_deadzone && (0.99 < h_fac) && (h_fac < 1.2)) {
     return 1.0;
   } else
     return fmin(facmax, fmax(facmin, h_fac));

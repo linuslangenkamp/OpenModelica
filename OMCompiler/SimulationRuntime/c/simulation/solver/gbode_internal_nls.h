@@ -47,6 +47,8 @@ Tolerances *gbInternalNlsGetScaledTolerances(void *nls_ptr);
 
 void gbInternalScheduleFastStatesUpdate(void *nls_ptr);
 
+void gbInternalInvalidatePreconditioner(void *nls_ptr);
+
 void *gbInternalNlsAllocate(int size,
                             NLS_USERDATA *userData,
                             modelica_boolean attemptRetry,
