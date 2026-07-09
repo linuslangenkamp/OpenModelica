@@ -1206,6 +1206,9 @@ protected
     partialCandidates := VariablePointers.fromList(listAppend(getMrfPartialCandidates(part), VariablePointers.toList(part.unknowns)), part.unknowns.scalarized);
     seedCandidates := VariablePointers.fromList(getSeedCandidatesDynamicOptimization(part, all_knowns, BVariable.isMrfVariable), partialCandidates.scalarized);
 
+hessianSymbolicForwardOverReverse(name, JacobianType.OPT_LFG, seedCandidates, partialCandidates,
+                         part.equations, part.strongComponents, part.adjacencyMatrix, funcMap, staticAsContinuous);
+
     // TODO: add _OPT to name?
     MRF_jacobian := func(name, JacobianType.OPT_MRF, seedCandidates, partialCandidates,
                          part.equations, part.strongComponents, part.adjacencyMatrix, funcMap, staticAsContinuous);
@@ -2569,6 +2572,683 @@ protected
 
     end match;
   end algorithmToSSA;
+
+public
+  type HessianType = enumeration(FORWARD_OVER_REVERSE, NONE);
+
+  uniontype Hessian
+    record HESSIAN
+      String name;
+      HessianType hessianType;
+      JacobianType jacType;
+
+      VariablePointers variables;
+      VariablePointers unknowns;
+      VariablePointers auxiliaries;
+
+      VariablePointers resultVars       "HVP result variables h";
+      VariablePointers tmpVars          "all internal tangent / adjoint / forward-over-reverse variables";
+      VariablePointers lambdaVars       "fixed reverse seed lambda";
+      VariablePointers directionVars    "forward direction seed v";
+
+      array<StrongComponent> comps;
+    end HESSIAN;
+
+    function toString
+      input Hessian hessian;
+      output String str;
+    protected
+      list<StrongComponent> comps;
+    algorithm
+      str := match hessian
+        case HESSIAN() algorithm
+          str := StringUtil.headline_1("Hessian " + hessian.name) + "\n";
+          str := str + "type: " + hessianTypeString(hessian.hessianType) + "\n";
+          str := str + "jacType: " + jacobianTypeString(hessian.jacType) + "\n\n";
+
+          str := str + BVariable.VariablePointers.toString(hessian.lambdaVars, "Lambda seed variables") + "\n";
+          str := str + BVariable.VariablePointers.toString(hessian.directionVars, "Direction seed variables") + "\n";
+          str := str + BVariable.VariablePointers.toString(hessian.resultVars, "HVP result variables") + "\n";
+          str := str + BVariable.VariablePointers.toString(hessian.tmpVars, "HVP temporary variables") + "\n";
+
+          comps := arrayList(hessian.comps);
+          str := str + StringUtil.headline_2("Hessian components") + "\n";
+          for comp in comps loop
+            str := str + StrongComponent.toString(comp) + "\n";
+          end for;
+        then str;
+      end match;
+    end toString;
+  end Hessian;
+
+  partial function hessianInterface
+    input String name;
+    input JacobianType jacType;
+    input VariablePointers seedCandidates;
+    input VariablePointers partialCandidates;
+    input EquationPointers equations;
+    input Option<array<StrongComponent>> strongComponents;
+    input Option<Adjacency.Matrix> full;
+    input UnorderedMap<Path, Function> funcMap;
+    input Boolean staticAsContinuous;
+    output Option<Hessian> hessian;
+  end hessianInterface;
+
+  function getHessianModule
+    output hessianInterface func;
+  algorithm
+    func := hessianSymbolicForwardOverReverse;
+  end getHessianModule;
+
+  function hessianNone
+    extends hessianInterface;
+  algorithm
+    hessian := NONE();
+  end hessianNone;
+
+protected
+  type HessianVarKind = enumeration(SEED, PDER_RESULT, PDER_TMP);
+
+  function hessianTypeString
+    input HessianType hessianType;
+    output String str;
+  algorithm
+    str := match hessianType
+      case HessianType.FORWARD_OVER_REVERSE then "[HVP-FORWARD-OVER-REVERSE]";
+      case HessianType.NONE                 then "[HVP-NONE]";
+                                          else "[HVP-ERR]";
+    end match;
+  end hessianTypeString;
+
+  function makeFreshHessianVar
+    "Create a fresh Hessian variable.
+
+     Do not call makeVarTraverse here. Hessian variables must not reuse existing
+     Jacobian seed/pDER partners such as $SEED_ODE_JAC.x or $pDER_ODE_JAC.x.
+    "
+    input Pointer<Variable> baseVar;
+    input String name;
+    input HessianVarKind kind;
+    input Boolean staticAsContinuous;
+    input Pointer<Integer> idx;
+    input UnorderedMap<ComponentRef, ComponentRef> mapIn;
+    output UnorderedMap<ComponentRef, ComponentRef> mapOut;
+    output Pointer<Variable> newVar;
+    output ComponentRef newCref;
+  protected
+    ComponentRef baseCref;
+    ComponentRef auxCref;
+    Pointer<Variable> auxVar;
+    Type ty;
+  algorithm
+    mapOut := mapIn;
+    baseCref := BVariable.getVarName(baseVar);
+
+    if not BVariable.isContinuous(baseVar, staticAsContinuous) then
+      newVar := baseVar;
+      newCref := ComponentRef.EMPTY();
+      return;
+    end if;
+
+    if UnorderedMap.contains(baseCref, mapOut) then
+      newCref := UnorderedMap.getOrFail(baseCref, mapOut);
+      newVar := BVariable.getVarPointer(newCref, sourceInfo());
+      return;
+    end if;
+
+    ty := ComponentRef.getSubscriptedType(baseCref, false);
+
+    /*
+     * Fresh aux base avoids reusing the original variable's existing seed/pDER
+     * partner pointers.
+     */
+    (auxVar, auxCref) := BVariable.makeAuxVar(
+      NBVariable.TEMPORARY_STR,
+      Pointer.access(idx) + 1,
+      ty,
+      false
+    );
+    Pointer.update(idx, Pointer.access(idx) + 1);
+
+    (newCref, newVar) := match kind
+      case HessianVarKind.SEED then
+        BVariable.makeSeedVar(auxCref, name);
+
+      case HessianVarKind.PDER_RESULT then
+        BVariable.makePDerVar(auxCref, name, isTmp = false);
+
+      case HessianVarKind.PDER_TMP then
+        BVariable.makePDerVar(auxCref, name, isTmp = true);
+    end match;
+
+    UnorderedMap.add(baseCref, newCref, mapOut);
+  end makeFreshHessianVar;
+
+  function makeFreshHessianVars
+    input list<Pointer<Variable>> baseVars;
+    input String name;
+    input HessianVarKind kind;
+    input Boolean staticAsContinuous;
+    input Pointer<Integer> idx;
+    input UnorderedMap<ComponentRef, ComponentRef> mapIn;
+    input list<Pointer<Variable>> newVarsIn;
+    output UnorderedMap<ComponentRef, ComponentRef> mapOut;
+    output list<Pointer<Variable>> newVarsOut;
+  protected
+    list<Pointer<Variable>> localVars = {};
+    Pointer<Variable> newVar;
+    ComponentRef newCref;
+  algorithm
+    mapOut := mapIn;
+
+    for baseVar in baseVars loop
+      (mapOut, newVar, newCref) := makeFreshHessianVar(
+        baseVar,
+        name,
+        kind,
+        staticAsContinuous,
+        idx,
+        mapOut
+      );
+
+      if not ComponentRef.isEmpty(newCref) then
+        localVars := newVar :: localVars;
+      end if;
+    end for;
+
+    newVarsOut := listAppend(newVarsIn, listReverse(localVars));
+  end makeFreshHessianVars;
+
+  function addComposedBaseMap
+    "For each base variable:
+       srcBaseMap[base] = src
+       dstBaseMap[base] = dst
+
+     Add:
+       outMap[src] = dst
+
+     Used for forward-over-reverse:
+       x_bar -> h
+    "
+    input list<Pointer<Variable>> baseVars;
+    input UnorderedMap<ComponentRef, ComponentRef> srcBaseMap;
+    input UnorderedMap<ComponentRef, ComponentRef> dstBaseMap;
+    input UnorderedMap<ComponentRef, ComponentRef> mapIn;
+    output UnorderedMap<ComponentRef, ComponentRef> mapOut;
+  protected
+    ComponentRef baseCref;
+    ComponentRef srcCref;
+    ComponentRef dstCref;
+    Option<ComponentRef> o_src;
+    Option<ComponentRef> o_dst;
+  algorithm
+    mapOut := mapIn;
+
+    for baseVar in baseVars loop
+      baseCref := BVariable.getVarName(baseVar);
+      o_src := UnorderedMap.get(baseCref, srcBaseMap);
+      o_dst := UnorderedMap.get(baseCref, dstBaseMap);
+
+      if isSome(o_src) and isSome(o_dst) then
+        srcCref := Util.getOption(o_src);
+        dstCref := Util.getOption(o_dst);
+        UnorderedMap.add(srcCref, dstCref, mapOut);
+      end if;
+    end for;
+  end addComposedBaseMap;
+
+  function mapFreshDerivativesForVariables
+    "Create fresh tangent variables for already generated variables.
+
+     The map key is the generated variable itself, not the original primal base.
+     Used for:
+       mu        -> mudot
+       x_bar_tmp -> x_bar_tmp_dot
+    "
+    input list<Pointer<Variable>> vars;
+    input String name;
+    input Boolean staticAsContinuous;
+    input Pointer<Integer> idx;
+    input UnorderedMap<ComponentRef, ComponentRef> mapIn;
+    input list<Pointer<Variable>> newVarsIn;
+    output UnorderedMap<ComponentRef, ComponentRef> mapOut;
+    output list<Pointer<Variable>> newVarsOut;
+  protected
+    list<Pointer<Variable>> localVars = {};
+    Pointer<Variable> newVar;
+    ComponentRef newCref;
+  algorithm
+    mapOut := mapIn;
+
+    for var in vars loop
+      (mapOut, newVar, newCref) := makeFreshHessianVar(
+        var,
+        name,
+        HessianVarKind.PDER_TMP,
+        staticAsContinuous,
+        idx,
+        mapOut
+      );
+
+      if not ComponentRef.isEmpty(newCref) then
+        localVars := newVar :: localVars;
+      end if;
+    end for;
+
+    newVarsOut := listAppend(newVarsIn, listReverse(localVars));
+  end mapFreshDerivativesForVariables;
+
+  function differentiateStrongComponentListForwardForHessian
+    "Forward differentiate strong components with an explicit seed map."
+    input list<StrongComponent> comps;
+    input UnorderedMap<ComponentRef, ComponentRef> diff_map;
+    input UnorderedMap<Path, Function> funcMap;
+    input Boolean scalarized;
+    input Pointer<Integer> idx;
+    input String contextName;
+    output list<StrongComponent> diffedComps;
+  protected
+    Differentiate.DifferentiationArguments diffArguments;
+  algorithm
+    diffArguments := Differentiate.DIFFERENTIATION_ARGUMENTS(
+      diffCref        = ComponentRef.EMPTY(),
+      new_vars        = {},
+      diff_map        = SOME(diff_map),
+      diffType        = NBDifferentiate.DifferentiationType.JACOBIAN,
+      funcMap         = funcMap,
+      scalarized      = scalarized,
+      adjoint_map     = NONE(),
+      current_grad    = Expression.EMPTY(Type.REAL()),
+      collectAdjoints = false
+    );
+
+    (diffedComps, _) := Differentiate.differentiateStrongComponentList(
+      comps,
+      diffArguments,
+      idx,
+      contextName,
+      getInstanceName()
+    );
+  end differentiateStrongComponentListForwardForHessian;
+
+  function hessianMapToString
+    input String title;
+    input UnorderedMap<ComponentRef, ComponentRef> map;
+    output String str;
+  algorithm
+    str := StringUtil.headline_3(title) + "\n";
+    str := str + UnorderedMap.toString(map, ComponentRef.toString, ComponentRef.toString, "\n  ", " -> ") + "\n";
+  end hessianMapToString;
+
+  function printHessian
+    input Hessian hessian;
+  algorithm
+    print(Hessian.toString(hessian));
+  end printHessian;
+
+  function printHessianGeneration
+    input String name;
+    input UnorderedMap<ComponentRef, ComponentRef> directionMap;
+    input UnorderedMap<ComponentRef, ComponentRef> reverseMap;
+    input UnorderedMap<ComponentRef, ComponentRef> forwardReverseMap;
+    input list<StrongComponent> tangentComps;
+    input list<StrongComponent> reverseComps;
+    input list<StrongComponent> forwardReverseComps;
+    input Hessian hessian;
+  algorithm
+    print(StringUtil.headline_1("[symhessdump] " + name + " forward-over-reverse Hessian-vector product") + "\n");
+
+    print(hessianMapToString("Direction map", directionMap));
+    print(hessianMapToString("Reverse map", reverseMap));
+    print(hessianMapToString("Forward-over-reverse map", forwardReverseMap));
+
+    print(StringUtil.headline_2("Tangent components") + "\n");
+    for comp in tangentComps loop
+      print(StrongComponent.toString(comp) + "\n");
+    end for;
+
+    print(StringUtil.headline_2("Reverse components") + "\n");
+    for comp in reverseComps loop
+      print(StrongComponent.toString(comp) + "\n");
+    end for;
+
+    print(StringUtil.headline_2("Forward-over-reverse components") + "\n");
+    for comp in forwardReverseComps loop
+      print(StrongComponent.toString(comp) + "\n");
+    end for;
+
+    print(Hessian.toString(hessian));
+  end printHessianGeneration;
+
+  function hessianSymbolicForwardOverReverse
+    "Symbolic Hessian-vector product generation.
+
+     Builds a separate Hessian structure. No Jacobian structure and no sparsity
+     pattern are created here.
+
+     Runtime/generated order:
+       1. tangent pass of primal strong components
+       2. reverse pass of primal strong components in lambda direction
+       3. forward pass of generated reverse components in v direction
+
+     For implicit algebraic loops the existing adjoint generator gives the
+     reverse linear solve, and the forward-over-reverse pass differentiates that
+     solve to get the mudot solve.
+    "
+    extends hessianInterface;
+  protected
+    String newName = name + "_HVP";
+    Pointer<Integer> idx = Pointer.create(0);
+
+    BVariable.checkVar rowFilter = getTmpFilterFunction(jacType);
+
+    list<StrongComponent> comps;
+    list<StrongComponent> primalComps;
+    list<StrongComponent> tangentComps = {};
+    list<StrongComponent> reverseComps = {};
+    list<StrongComponent> forwardReverseComps = {};
+    list<StrongComponent> allComps = {};
+
+    list<Pointer<Variable>> seedBaseVars;
+    list<Pointer<Variable>> rowBaseVars;
+    list<Pointer<Variable>> tmpBaseVars;
+
+    list<Pointer<Variable>> directionSeedVars = {};
+    list<Pointer<Variable>> lambdaVars = {};
+    list<Pointer<Variable>> tangentVars = {};
+    list<Pointer<Variable>> xbarVars = {};
+    list<Pointer<Variable>> xbarTmpVars = {};
+    list<Pointer<Variable>> hvpResultVars = {};
+    list<Pointer<Variable>> reverseInternalVars = {};
+    list<Pointer<Variable>> forwardReverseTmpVars = {};
+
+    list<Pointer<Variable>> allTmpVars = {};
+    list<Pointer<Variable>> allUnknownVars = {};
+    list<Pointer<Variable>> allAuxVars = {};
+    list<Pointer<Variable>> allVars = {};
+
+    UnorderedMap<ComponentRef, ComponentRef> directionMap;
+    UnorderedMap<ComponentRef, ComponentRef> reverseMap;
+    UnorderedMap<ComponentRef, ComponentRef> xbarBaseMap;
+    UnorderedMap<ComponentRef, ComponentRef> xbarTmpBaseMap;
+    UnorderedMap<ComponentRef, ComponentRef> lambdaBaseMap;
+    UnorderedMap<ComponentRef, ComponentRef> hvpBaseMap;
+    UnorderedMap<ComponentRef, ComponentRef> forwardReverseMap;
+
+    list<StrongComponent> compReverseComps;
+    list<Pointer<Variable>> compReverseInternalVars;
+
+    Hessian hessianValue;
+  algorithm
+    _ := equations;
+    _ := full;
+
+    if isSome(strongComponents) then
+      comps := list(comp for comp guard(not StrongComponent.isDiscrete(comp)) in Util.getOption(strongComponents));
+      primalComps := comps;
+
+      for comp in primalComps loop
+        if not isSupportedAdjointStrongComponent(comp) then
+          Error.addMessage(Error.INTERNAL_ERROR, {
+            getInstanceName() + " only supports SINGLE_COMPONENT, MULTI_COMPONENT, SLICED_COMPONENT, RESIZABLE_COMPONENT and ALGEBRAIC_LOOP for symbolic Hessian-vector products."
+          });
+          fail();
+        end if;
+      end for;
+    else
+      Error.addMessage(Error.INTERNAL_ERROR, {getInstanceName() + " failed because no strong components were given."});
+      fail();
+    end if;
+
+    seedBaseVars := VariablePointers.toList(seedCandidates);
+
+    (rowBaseVars, tmpBaseVars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), rowFilter);
+    rowBaseVars := list(var for var guard(BVariable.isContinuous(var, staticAsContinuous)) in rowBaseVars);
+    (tmpBaseVars, _) := List.splitOnTrue(tmpBaseVars, function BVariable.isContinuous(staticAsContinuous = staticAsContinuous));
+
+    /*
+     * Direction map:
+     *   primal independent x -> v
+     *   primal dependent/row/tmp z -> zdot
+     */
+    directionMap := UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+
+    (directionMap, directionSeedVars) := makeFreshHessianVars(
+      seedBaseVars,
+      newName + "_V",
+      HessianVarKind.SEED,
+      staticAsContinuous,
+      idx,
+      directionMap,
+      directionSeedVars
+    );
+
+    (directionMap, tangentVars) := makeFreshHessianVars(
+      listAppend(rowBaseVars, tmpBaseVars),
+      newName + "_TAN",
+      HessianVarKind.PDER_TMP,
+      staticAsContinuous,
+      idx,
+      directionMap,
+      tangentVars
+    );
+
+    /*
+     * Reverse map:
+     *   primal independent x -> x_bar
+     *   primal tmp z          -> z_bar
+     *   primal row f          -> lambda
+     */
+    xbarBaseMap := UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+    xbarTmpBaseMap := UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+    lambdaBaseMap := UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+
+    (xbarBaseMap, xbarVars) := makeFreshHessianVars(
+      seedBaseVars,
+      newName + "_REV",
+      HessianVarKind.PDER_TMP,
+      staticAsContinuous,
+      idx,
+      xbarBaseMap,
+      xbarVars
+    );
+
+    (xbarTmpBaseMap, xbarTmpVars) := makeFreshHessianVars(
+      tmpBaseVars,
+      newName + "_REV",
+      HessianVarKind.PDER_TMP,
+      staticAsContinuous,
+      idx,
+      xbarTmpBaseMap,
+      xbarTmpVars
+    );
+
+    (lambdaBaseMap, lambdaVars) := makeFreshHessianVars(
+      rowBaseVars,
+      newName + "_LAM",
+      HessianVarKind.SEED,
+      staticAsContinuous,
+      idx,
+      lambdaBaseMap,
+      lambdaVars
+    );
+
+    reverseMap := UnorderedMap.merge(xbarBaseMap, xbarTmpBaseMap, sourceInfo());
+    reverseMap := UnorderedMap.merge(reverseMap, lambdaBaseMap, sourceInfo());
+
+    /*
+     * HVP result variables:
+     *   primal independent x -> h
+     */
+    hvpBaseMap := UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+
+    (hvpBaseMap, hvpResultVars) := makeFreshHessianVars(
+      seedBaseVars,
+      newName,
+      HessianVarKind.PDER_RESULT,
+      staticAsContinuous,
+      idx,
+      hvpBaseMap,
+      hvpResultVars
+    );
+
+    /*
+     * 1. Tangent pass over primal components.
+     */
+    tangentComps := differentiateStrongComponentListForwardForHessian(
+      primalComps,
+      directionMap,
+      funcMap,
+      seedCandidates.scalarized,
+      idx,
+      newName + "_TAN"
+    );
+
+    /*
+     * 2. Reverse pass over primal components.
+     */
+    for comp in primalComps loop
+      (compReverseComps, compReverseInternalVars) := generateAdjointComponent(
+        comp,
+        reverseMap,
+        funcMap,
+        seedCandidates.scalarized,
+        staticAsContinuous,
+        idx,
+        newName + "_REV",
+        seedCandidates,
+        tmpBaseVars
+      );
+
+      for reverseComp in compReverseComps loop
+        reverseComps := reverseComp :: reverseComps;
+      end for;
+
+      reverseInternalVars := listAppend(compReverseInternalVars, reverseInternalVars);
+    end for;
+
+    /*
+     * 3. Forward-over-reverse pass.
+     */
+    forwardReverseMap := directionMap;
+
+    /*
+     * x_bar -> h
+     */
+    forwardReverseMap := addComposedBaseMap(
+      seedBaseVars,
+      xbarBaseMap,
+      hvpBaseMap,
+      forwardReverseMap
+    );
+
+    /*
+     * z_bar -> z_bar_dot for reverse temporary adjoints.
+     */
+    (forwardReverseMap, forwardReverseTmpVars) := mapFreshDerivativesForVariables(
+      xbarTmpVars,
+      newName + "_FOR",
+      staticAsContinuous,
+      idx,
+      forwardReverseMap,
+      forwardReverseTmpVars
+    );
+
+    /*
+     * mu/internal reverse variables -> mudot/internal_dot.
+     */
+    (forwardReverseMap, forwardReverseTmpVars) := mapFreshDerivativesForVariables(
+      reverseInternalVars,
+      newName + "_FOR",
+      staticAsContinuous,
+      idx,
+      forwardReverseMap,
+      forwardReverseTmpVars
+    );
+
+    forwardReverseComps := differentiateStrongComponentListForwardForHessian(
+      reverseComps,
+      forwardReverseMap,
+      funcMap,
+      seedCandidates.scalarized,
+      idx,
+      newName + "_FOR"
+    );
+
+    allComps := listAppend(tangentComps, listAppend(reverseComps, forwardReverseComps));
+
+    allTmpVars := listAppend(
+      tangentVars,
+      listAppend(
+        xbarVars,
+        listAppend(
+          xbarTmpVars,
+          listAppend(reverseInternalVars, forwardReverseTmpVars)
+        )
+      )
+    );
+
+    allUnknownVars := listAppend(hvpResultVars, allTmpVars);
+    allAuxVars := listAppend(lambdaVars, directionSeedVars);
+    allVars := listAppend(allUnknownVars, allAuxVars);
+
+    hessianValue := Hessian.HESSIAN(
+      name          = newName,
+      hessianType   = HessianType.FORWARD_OVER_REVERSE,
+      jacType       = jacType,
+      variables     = VariablePointers.fromList(allVars),
+      unknowns      = VariablePointers.fromList(allUnknownVars),
+      auxiliaries   = VariablePointers.fromList(allAuxVars),
+      resultVars    = VariablePointers.fromList(hvpResultVars),
+      tmpVars       = VariablePointers.fromList(allTmpVars),
+      lambdaVars    = VariablePointers.fromList(lambdaVars),
+      directionVars = VariablePointers.fromList(directionSeedVars),
+      comps         = listArray(allComps)
+    );
+
+    hessian := SOME(hessianValue);
+
+    if true then
+      printHessianGeneration(
+        newName,
+        directionMap,
+        reverseMap,
+        forwardReverseMap,
+        tangentComps,
+        reverseComps,
+        forwardReverseComps,
+        hessianValue
+      );
+    end if;
+  end hessianSymbolicForwardOverReverse;
+
+  function hessianForStrongComponents
+    "Convenience wrapper for direct strong-component HVP generation."
+    input VariablePointers seedCandidates;
+    input VariablePointers partialCandidates;
+    input EquationPointers equations;
+    input array<StrongComponent> comps;
+    input Option<Adjacency.Matrix> full;
+    input UnorderedMap<Path, Function> funcMap;
+    input String name;
+    input JacobianType jacType = JacobianType.NLS;
+    input Boolean staticAsContinuous;
+    output Option<Hessian> hessian;
+  protected
+    constant hessianInterface func = hessianSymbolicForwardOverReverse;
+  algorithm
+    hessian := func(
+      name                = name,
+      jacType             = jacType,
+      seedCandidates      = seedCandidates,
+      partialCandidates   = partialCandidates,
+      equations           = equations,
+      strongComponents    = SOME(comps),
+      full                = full,
+      funcMap             = funcMap,
+      staticAsContinuous  = staticAsContinuous
+    );
+  end hessianForStrongComponents;
 
   annotation(__OpenModelica_Interface="nbackend");
 end NBJacobian;
