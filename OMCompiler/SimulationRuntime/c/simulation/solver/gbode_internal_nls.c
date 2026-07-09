@@ -1571,9 +1571,9 @@ void *gbInternalNlsAllocate(int size,
   const double safety_newt = 0.1;
   double target_alpha = alpha_default;
 
-  if (!tabl->richardson && tabl->error_order < tabl->order_b && tabl->order_b - tabl->error_order != 1)
+  if (tabl->error.active.order < tabl->order_b - 1 /* method is likely superconvergent: radau, lobatto, gauss */)
   {
-    const double order_quot = ((double)tabl->error_order + 1.0) / ((double)tabl->order_b + 1.0);
+    const double order_quot = ((double)tabl->error.active.order + 1.0) / ((double)tabl->order_b + 1.0);
     target_alpha = pow(safety_newt, 1.0 / order_quot);
   }
   nls->fnewt = fmax(DBL_ABSORPTION / nls->integrator_tol, fmin(alpha_maximal, target_alpha));

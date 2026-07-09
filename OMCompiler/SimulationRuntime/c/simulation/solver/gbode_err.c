@@ -94,15 +94,13 @@ int gbEstimateError(GB_ERROR_CONTEXT *context, const GB_ERROR_ESTIMATOR *estimat
 
 double gbScaledErrorTolerance(double tol, int methodOrder, int estimatorOrder, modelica_boolean richardson)
 {
-  if (richardson || estimatorOrder >= methodOrder)
+  if (richardson || estimatorOrder == methodOrder)
   {
+    // shortcut, if we know the return is exactly tol
     return tol;
   }
 
-  const double order_quot = ((double) estimatorOrder + 1.0) / ((double) methodOrder + 1.0);
-  const double rtol_pred = GB_TOLERANCE_SCALING_SAFETY * pow(tol, order_quot);
-
-  return fmax(tol, rtol_pred);
+  return pow(tol, ((double) estimatorOrder + 1.0) / ((double) methodOrder + 1.0));
 }
 
 static void embeddedErrorEstimate_gb(BUTCHER_TABLEAU *tableau, const double *weights, const double *K, double stepSize, int nStates, double *err)
@@ -112,7 +110,7 @@ static void embeddedErrorEstimate_gb(BUTCHER_TABLEAU *tableau, const double *wei
 
   for (int stage = 0; stage < nStages; stage++)
   {
-    factors[stage] = stepSize * (tableau->b[stage] - weights[stage]);
+    factors[stage] = stepSize * weights[stage];
   }
 
   /* err := stepSize * (K otimes I) * (b - weights) */
@@ -141,7 +139,7 @@ static void embeddedErrorEstimate_gbf(BUTCHER_TABLEAU *tableau, const double *we
 
   for (int stage = 0; stage < nStages; stage++)
   {
-    factors[stage] = gbfData->stepSize * (tableau->b[stage] - weights[stage]);
+    factors[stage] = gbfData->stepSize * weights[stage];
   }
 
   for (int fast_idx = 0; fast_idx < nFastStates; fast_idx++)

@@ -38,189 +38,191 @@
 
 #include <math.h>
 
-/**
- * @brief Generic multi-step function.
- *
- * Internal non-linear equation system will be solved with non-linear solver specified during setup.
- * Results will be saved in y and the signed error estimate in yt.
- *
- * @param data              Runtime data struct.
- * @param threadData        Thread data for error handling.
- * @param solverInfo        Storing Runge-Kutta solver data.
- * @return int              Return 0 on success, -1 on failure.
- */
-int full_implicit_MS(DATA* data, threadData_t* threadData, SOLVER_INFO* solverInfo)
-{
-  SIMULATION_DATA *sData = (SIMULATION_DATA*)data->localData[0];
-  modelica_real* fODE = sData->realVars + data->modelData->nStates;
-  DATA_GBODE* gbData = (DATA_GBODE*)solverInfo->solverData;
-
-  int i;
-  int stage;
-  int nStates = data->modelData->nStates;
-  int nStages = gbData->tableau->nStages;
-  NLS_SOLVER_STATUS solved = NLS_FAILED;
-
-  /* Predictor step */
-  for (i = 0; i < nStates; i++) {
-    gbData->yt[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++) {
-      gbData->yt[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
-                        gbData->kv[stage * nStates + i] * gbData->tableau->bt[stage] *  gbData->stepSize;
-    }
-    gbData->yt[i] += gbData->kv[stage * nStates + i] * gbData->tableau->bt[stage] * gbData->stepSize;
-    gbData->yt[i] /= gbData->tableau->c[stage];
-  }
-
-
-  /* Constant part of the multi-step method */
-  for (i = 0; i < nStates; i++) {
-    gbData->res_const[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++) {
-      gbData->res_const[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
-                               gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] *  gbData->stepSize;
-    }
-  }
-  // printVector_gb("res_const:  ", gbData->res_const, nStates, gbData->time);
-
-  /* Compute intermediate step k, explicit if diagonal element is zero, implicit otherwise
-    * k[i] = f(tOld + c[i]*h, yOld + h*sum(A[i,j]*k[j], i=j..i)) */
-  // here, it yields:   stage == stage_, and stage * nStages + stage_ is index of the diagonal element
-
-  // set simulation time with respect to the current stage
-  sData->timeValue = gbData->time + gbData->stepSize;
-
-  // solve for x: 0 = yold-x + h*(sum(A[i,j]*k[j], i=1..j-1) + A[i,i]*f(t + c[i]*h, x))
-  NONLINEAR_SYSTEM_DATA* nlsData = gbData->nlsData;
-
-  // Set start vectors for the noblinear solver
-  memcpy(nlsData->nlsx, gbData->yt, nStates*sizeof(modelica_real));
-  memcpy(nlsData->nlsxOld, nlsData->nlsx, nStates*sizeof(modelica_real));
-  memcpy(nlsData->nlsxExtrapolation, nlsData->nlsx, nStates*sizeof(modelica_real));
-
-  solved = solveNLS_gb(data, threadData, nlsData, gbData, FALSE);
-
-  if (solved != NLS_SOLVED) {
-    if (OMC_ACTIVE_STREAM(OMC_LOG_SOLVER)) warningStreamPrint(OMC_LOG_SOLVER, 0, "gbode error: Failed to solve NLS in full_implicit_MS at time t=%g", gbData->time);
-    return -1;
-  }
-
-  memcpy(gbData->kv + stage * nStates, fODE, nStates*sizeof(double));
-
-  /* Corrector step */
-  for (i = 0; i < nStates; i++) {
-    gbData->y[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++) {
-      gbData->y[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
-                       gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] *  gbData->stepSize;
-    }
-    gbData->y[i] += gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] * gbData->stepSize;
-    gbData->y[i] /= gbData->tableau->c[stage];
-    gbData->yt[i] = gbData->y[i] - gbData->yt[i];
-  }
-
-  return 0;
-}
-
-/**
- * @brief Generic multi-step function.
- *
- * Internal non-linear equation system will be solved with non-linear solver specified during setup.
- * Results will be saved in y and the signed error estimate in yt.
- *
- * @param data              Runtime data struct.
- * @param threadData        Thread data for error handling.
- * @param solverInfo        Storing Runge-Kutta solver data.
- * @return int              Return 0 on success, -1 on failure.
- */
-int full_implicit_MS_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solverInfo)
-{
-  SIMULATION_DATA *sData = (SIMULATION_DATA*)data->localData[0];
-  modelica_real* fODE = sData->realVars + data->modelData->nStates;
-  DATA_GBODE* gbData = (DATA_GBODE*)solverInfo->solverData;
-  DATA_GBODEF* gbfData = gbData->gbfData;
-
-  int i, ii;
-  int stage;
-  int nStates = data->modelData->nStates;
-  int nStages = gbfData->tableau->nStages;
-  NLS_SOLVER_STATUS solved = NLS_FAILED;
-
-  /* Predictor step */
-  for (ii = 0; ii < gbData->nFastStates; ii++)
-  {
-    i = gbData->fastStatesIdx[ii];
-    gbfData->yt[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++)
-    {
-      gbfData->yt[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
-                         gbfData->kv[stage * nStates + i] * gbfData->tableau->bt[stage] *  gbfData->stepSize;
-    }
-    gbfData->yt[i] += gbfData->kv[stage * nStates + i] * gbfData->tableau->bt[stage] * gbfData->stepSize;
-    gbfData->yt[i] /= gbfData->tableau->c[stage];
-  }
-
-
-  /* Constant part of the multi-step method */
-  for (ii = 0; ii < gbData->nFastStates; ii++)
-  {
-    i = gbData->fastStatesIdx[ii];
-    gbfData->res_const[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++)
-    {
-      gbfData->res_const[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
-                                gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] *  gbfData->stepSize;
-    }
-  }
-  // printVector_gb("res_const:  ", gbData->res_const, nStates, gbData->time);
-
-  /* Compute intermediate step k, explicit if diagonal element is zero, implicit otherwise
-    * k[i] = f(tOld + c[i]*h, yOld + h*sum(A[i,j]*k[j], i=j..i)) */
-  // here, it yields:   stage == stage_, and stage * nStages + stage_ is index of the diagonal element
-
-  // set simulation time with respect to the current stage
-  sData->timeValue = gbfData->time + gbfData->stepSize;
-  // interpolate the slow states on the current time of gbfData->yOld for correct evaluation of gbfData->res_const
-  gb_interpolation(gbData->interpolation,
-                   gbData->timeLeft,  gbData->yLeft,  gbData->kLeft,
-                   gbData->timeRight, gbData->yRight, gbData->kRight,
-                   sData->timeValue,  sData->realVars,
-                   gbData->nSlowStates, gbData->slowStatesIdx, nStates, gbData->tableau, gbData->x, gbData->k);
-
-  // solve for x: 0 = yold-x + h*(sum(A[i,j]*k[j], i=1..j-1) + A[i,i]*f(t + c[i]*h, x))
-  NONLINEAR_SYSTEM_DATA* nlsData = gbfData->nlsData;
-
-  projVector_gbf(nlsData->nlsx, gbfData->yt, gbData->nFastStates, gbData->fastStatesIdx);
-  memcpy(nlsData->nlsxOld, nlsData->nlsx, nStates*sizeof(modelica_real));
-  memcpy(nlsData->nlsxExtrapolation, nlsData->nlsx, nStates*sizeof(modelica_real));
-
-  solved = solveNLS_gb(data, threadData, nlsData, gbData, TRUE);
-
-  if (solved != NLS_SOLVED) {
-    if (OMC_ACTIVE_STREAM(OMC_LOG_SOLVER)) warningStreamPrint(OMC_LOG_SOLVER, 0, "gbodef error: Failed to solve NLS in full_implicit_MS_MR at time t=%g", gbfData->time);
-    return -1;
-  }
-
-  memcpy(gbfData->kv + stage * nStates, fODE, nStates*sizeof(double));
-
-  /* Corrector step */
-  for (ii = 0; ii < gbData->nFastStates; ii++)
-  {
-    i = gbData->fastStatesIdx[ii];
-    gbfData->y[i] = 0;
-    for (stage = 0; stage < nStages-1; stage++)
-    {
-      gbfData->y[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
-                        gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] * gbfData->stepSize;
-    }
-    gbfData->y[i] += gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] * gbfData->stepSize;
-    gbfData->y[i] /= gbfData->tableau->c[stage];
-    gbfData->yt[i] = gbfData->y[i] - gbfData->yt[i];
-  }
-
-  return 0;
-}
-
+// /**
+//  * @brief Generic multi-step function.
+//  *
+//  * Internal non-linear equation system will be solved with non-linear solver specified during setup.
+//  * Results will be saved in y and the signed error estimate in yt.
+//  *
+//  * @param data              Runtime data struct.
+//  * @param threadData        Thread data for error handling.
+//  * @param solverInfo        Storing Runge-Kutta solver data.
+//  * @return int              Return 0 on success, -1 on failure.
+//  */
+ int full_implicit_MS(DATA* data, threadData_t* threadData, SOLVER_INFO* solverInfo) {}
+// {
+//   SIMULATION_DATA *sData = (SIMULATION_DATA*)data->localData[0];
+//   modelica_real* fODE = sData->realVars + data->modelData->nStates;
+//   DATA_GBODE* gbData = (DATA_GBODE*)solverInfo->solverData;
+//
+//   int i;
+//   int stage;
+//   int nStates = data->modelData->nStates;
+//   int nStages = gbData->tableau->nStages;
+//   NLS_SOLVER_STATUS solved = NLS_FAILED;
+//
+//   /* Predictor step */
+//   for (i = 0; i < nStates; i++) {
+//     gbData->yt[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++) {
+//       gbData->yt[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
+//                         gbData->kv[stage * nStates + i] * gbData->tableau->bt[stage] *  gbData->stepSize;
+//     }
+//     gbData->yt[i] += gbData->kv[stage * nStates + i] * gbData->tableau->bt[stage] * gbData->stepSize;
+//     gbData->yt[i] /= gbData->tableau->c[stage];
+//   }
+//
+//
+//   /* Constant part of the multi-step method */
+//   for (i = 0; i < nStates; i++) {
+//     gbData->res_const[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++) {
+//       gbData->res_const[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
+//                                gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] *  gbData->stepSize;
+//     }
+//   }
+//   // printVector_gb("res_const:  ", gbData->res_const, nStates, gbData->time);
+//
+//   /* Compute intermediate step k, explicit if diagonal element is zero, implicit otherwise
+//     * k[i] = f(tOld + c[i]*h, yOld + h*sum(A[i,j]*k[j], i=j..i)) */
+//   // here, it yields:   stage == stage_, and stage * nStages + stage_ is index of the diagonal element
+//
+//   // set simulation time with respect to the current stage
+//   sData->timeValue = gbData->time + gbData->stepSize;
+//
+//   // solve for x: 0 = yold-x + h*(sum(A[i,j]*k[j], i=1..j-1) + A[i,i]*f(t + c[i]*h, x))
+//   NONLINEAR_SYSTEM_DATA* nlsData = gbData->nlsData;
+//
+//   // Set start vectors for the noblinear solver
+//   memcpy(nlsData->nlsx, gbData->yt, nStates*sizeof(modelica_real));
+//   memcpy(nlsData->nlsxOld, nlsData->nlsx, nStates*sizeof(modelica_real));
+//   memcpy(nlsData->nlsxExtrapolation, nlsData->nlsx, nStates*sizeof(modelica_real));
+//
+//   solved = solveNLS_gb(data, threadData, nlsData, gbData, FALSE);
+//
+//   if (solved != NLS_SOLVED) {
+//     if (OMC_ACTIVE_STREAM(OMC_LOG_SOLVER)) warningStreamPrint(OMC_LOG_SOLVER, 0, "gbode error: Failed to solve NLS in full_implicit_MS at time t=%g", gbData->time);
+//     return -1;
+//   }
+//
+//   memcpy(gbData->kv + stage * nStates, fODE, nStates*sizeof(double));
+//
+//   /* Corrector step */
+//   for (i = 0; i < nStates; i++) {
+//     gbData->y[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++) {
+//       gbData->y[i] += -gbData->yv[stage * nStates + i] * gbData->tableau->c[stage] +
+//                        gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] *  gbData->stepSize;
+//     }
+//     gbData->y[i] += gbData->kv[stage * nStates + i] * gbData->tableau->b[stage] * gbData->stepSize;
+//     gbData->y[i] /= gbData->tableau->c[stage];
+//     gbData->yt[i] = gbData->y[i] - gbData->yt[i];
+//     gbData->errest[i] = fabs(gbData->yt[i]);
+//   }
+//
+//   return 0;
+// }
+//
+// /**
+//  * @brief Generic multi-step function.
+//  *
+//  * Internal non-linear equation system will be solved with non-linear solver specified during setup.
+//  * Results will be saved in y and the signed error estimate in yt.
+//  *
+//  * @param data              Runtime data struct.
+//  * @param threadData        Thread data for error handling.
+//  * @param solverInfo        Storing Runge-Kutta solver data.
+//  * @return int              Return 0 on success, -1 on failure.
+//  */
+ int full_implicit_MS_MR(DATA* data, threadData_t* threadData, SOLVER_INFO* solverInfo) {}
+// {
+//   SIMULATION_DATA *sData = (SIMULATION_DATA*)data->localData[0];
+//   modelica_real* fODE = sData->realVars + data->modelData->nStates;
+//   DATA_GBODE* gbData = (DATA_GBODE*)solverInfo->solverData;
+//   DATA_GBODEF* gbfData = gbData->gbfData;
+//
+//   int i, ii;
+//   int stage;
+//   int nStates = data->modelData->nStates;
+//   int nStages = gbfData->tableau->nStages;
+//   NLS_SOLVER_STATUS solved = NLS_FAILED;
+//
+//   /* Predictor step */
+//   for (ii = 0; ii < gbData->nFastStates; ii++)
+//   {
+//     i = gbData->fastStatesIdx[ii];
+//     gbfData->yt[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++)
+//     {
+//       gbfData->yt[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
+//                          gbfData->kv[stage * nStates + i] * gbfData->tableau->bt[stage] *  gbfData->stepSize;
+//     }
+//     gbfData->yt[i] += gbfData->kv[stage * nStates + i] * gbfData->tableau->bt[stage] * gbfData->stepSize;
+//     gbfData->yt[i] /= gbfData->tableau->c[stage];
+//   }
+//
+//
+//   /* Constant part of the multi-step method */
+//   for (ii = 0; ii < gbData->nFastStates; ii++)
+//   {
+//     i = gbData->fastStatesIdx[ii];
+//     gbfData->res_const[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++)
+//     {
+//       gbfData->res_const[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
+//                                 gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] *  gbfData->stepSize;
+//     }
+//   }
+//   // printVector_gb("res_const:  ", gbData->res_const, nStates, gbData->time);
+//
+//   /* Compute intermediate step k, explicit if diagonal element is zero, implicit otherwise
+//     * k[i] = f(tOld + c[i]*h, yOld + h*sum(A[i,j]*k[j], i=j..i)) */
+//   // here, it yields:   stage == stage_, and stage * nStages + stage_ is index of the diagonal element
+//
+//   // set simulation time with respect to the current stage
+//   sData->timeValue = gbfData->time + gbfData->stepSize;
+//   // interpolate the slow states on the current time of gbfData->yOld for correct evaluation of gbfData->res_const
+//   gb_interpolation(gbData->interpolation,
+//                    gbData->timeLeft,  gbData->yLeft,  gbData->kLeft,
+//                    gbData->timeRight, gbData->yRight, gbData->kRight,
+//                    sData->timeValue,  sData->realVars,
+//                    gbData->nSlowStates, gbData->slowStatesIdx, nStates, gbData->tableau, gbData->x, gbData->k);
+//
+//   // solve for x: 0 = yold-x + h*(sum(A[i,j]*k[j], i=1..j-1) + A[i,i]*f(t + c[i]*h, x))
+//   NONLINEAR_SYSTEM_DATA* nlsData = gbfData->nlsData;
+//
+//   projVector_gbf(nlsData->nlsx, gbfData->yt, gbData->nFastStates, gbData->fastStatesIdx);
+//   memcpy(nlsData->nlsxOld, nlsData->nlsx, nStates*sizeof(modelica_real));
+//   memcpy(nlsData->nlsxExtrapolation, nlsData->nlsx, nStates*sizeof(modelica_real));
+//
+//   solved = solveNLS_gb(data, threadData, nlsData, gbData, TRUE);
+//
+//   if (solved != NLS_SOLVED) {
+//     if (OMC_ACTIVE_STREAM(OMC_LOG_SOLVER)) warningStreamPrint(OMC_LOG_SOLVER, 0, "gbodef error: Failed to solve NLS in full_implicit_MS_MR at time t=%g", gbfData->time);
+//     return -1;
+//   }
+//
+//   memcpy(gbfData->kv + stage * nStates, fODE, nStates*sizeof(double));
+//
+//   /* Corrector step */
+//   for (ii = 0; ii < gbData->nFastStates; ii++)
+//   {
+//     i = gbData->fastStatesIdx[ii];
+//     gbfData->y[i] = 0;
+//     for (stage = 0; stage < nStages-1; stage++)
+//     {
+//       gbfData->y[i] += -gbfData->yv[stage * nStates + i] * gbfData->tableau->c[stage] +
+//                         gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] * gbfData->stepSize;
+//     }
+//     gbfData->y[i] += gbfData->kv[stage * nStates + i] * gbfData->tableau->b[stage] * gbfData->stepSize;
+//     gbfData->y[i] /= gbfData->tableau->c[stage];
+//     gbfData->yt[i] = gbfData->y[i] - gbfData->yt[i];
+//     gbfData->errest[i] = fabs(gbfData->yt[i]);
+//   }
+//
+//   return 0;
+// }
+//
 /**
  * @brief Generic diagonal implicit Runge-Kutta step function.
  *
@@ -926,6 +928,7 @@ int gbodef_richardson(DATA* data, threadData_t* threadData, SOLVER_INFO* solverI
     for (i = 0; i < nStates; i++) {
       double y_extrapolated = (richardsonFactor * gbfData->y1[i] - gbfData->y[i]) / (richardsonFactor - 1);
       gbfData->yt[i] = gbfData->y[i] - y_extrapolated;
+      gbfData->errest[i] = fabs(gbfData->yt[i]);
     }
   }
 
@@ -1064,6 +1067,7 @@ int gbode_richardson(DATA* data, threadData_t* threadData, SOLVER_INFO* solverIn
     for (i = 0; i < nStates; i++) {
       double y_extrapolated = (richardsonFactor * gbData->y1[i] - gbData->y[i]) / (richardsonFactor - 1);
       gbData->yt[i] = gbData->y[i] - y_extrapolated;
+      gbData->errest[i] = fabs(gbData->yt[i]);
     }
   }
 

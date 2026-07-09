@@ -43,8 +43,6 @@ struct GB_ERROR_CONTEXT
   modelica_boolean isFast;
 };
 
-#define GB_TOLERANCE_SCALING_SAFETY 0.2
-
 int gbEstimateError(GB_ERROR_CONTEXT *context, const GB_ERROR_ESTIMATOR *estimator);
 
 int gbEmbeddedErrorEstimator(GB_ERROR_CONTEXT *context, const GB_ERROR_ESTIMATOR *estimator);

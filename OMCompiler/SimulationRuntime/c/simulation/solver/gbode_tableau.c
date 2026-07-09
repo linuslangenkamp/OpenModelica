@@ -141,9 +141,9 @@ static inline modelica_boolean errorEstimatorIsSet(const GB_ERROR_ESTIMATOR *est
 
 static inline void setEmbeddedErrorEstimator(BUTCHER_TABLEAU *tableau)
 {
-  if (tableau->bt != NULL)
+  if (tableau->d != NULL)
   {
-    setErrorEstimator(&tableau->error.embedded, GB_ERROR_EMBEDDED, (int) fmin(tableau->order_b, tableau->order_bt), gbEmbeddedErrorEstimator, tableau->bt);
+    setErrorEstimator(&tableau->error.embedded, GB_ERROR_EMBEDDED, (int) fmin(tableau->order_b, tableau->order_embd), gbEmbeddedErrorEstimator, tableau->d);
   }
 }
 
@@ -174,7 +174,7 @@ static void freeErrorEstimatorData(GB_ERROR_ESTIMATOR *estimator)
  * @param b           Vector b.
  * @param bt          Vector b transposed. Can be NULL.
  */
-void setButcherTableau(BUTCHER_TABLEAU* tableau, const double *c, const double *A, const double *b, const double *bt)
+void setButcherTableau(BUTCHER_TABLEAU* tableau, const double *c, const double *A, const double *b, const double *d)
 {
   assertStreamPrint(NULL, c != NULL, "setButcherTableau: c is NULL");
   assertStreamPrint(NULL, A != NULL, "setButcherTableau: A is NULL");
@@ -186,18 +186,18 @@ void setButcherTableau(BUTCHER_TABLEAU* tableau, const double *c, const double *
   tableau->c = malloc(n);
   tableau->A = malloc(nn);
   tableau->b = malloc(n);
-  if (bt != NULL) {
-    tableau->bt = malloc(n);
+  if (d) {
+    tableau->d = malloc(n);
   } else {
-    tableau->bt = NULL;
+    tableau->d = NULL;
   }
   tableau->b_dt = malloc(n);
 
   memcpy(tableau->c, c, n);
   memcpy(tableau->A, A, nn);
   memcpy(tableau->b, b, n);
-  if (bt != NULL) {
-    memcpy(tableau->bt, bt, n);
+  if (d != NULL) {
+    memcpy(tableau->d, d, n);
   }
 
   tableau->withDenseOutput = FALSE;
@@ -235,10 +235,10 @@ void setContractiveDefectError(BUTCHER_TABLEAU *tableau, const double *dT_A, mod
 
   if (only_filter)
   {
-    if (tableau->bt != NULL)
+    if (tableau->d != NULL)
     {
       setErrorEstimator(&tableau->error.contractive_filter, GB_ERROR_FILTER,
-                        (int) fmin(tableau->order_b, tableau->order_bt),
+                        (int) fmin(tableau->order_b, tableau->order_embd),
                         gbContractiveFilterErrorEstimator, NULL);
     }
     return;
@@ -317,7 +317,6 @@ void finalizeButcherTableauError(BUTCHER_TABLEAU *tableau, enum GB_NLS_METHOD nl
 
     case GB_ERROR_RICHARDSON:
       setErrorEstimator(&tableau->error.active, GB_ERROR_RICHARDSON, tableau->order_b, gbRichardsonErrorEstimator, NULL);
-      tableau->error_order = tableau->order_b;
       return;
 
     case GB_ERROR_EMBEDDED:
@@ -364,7 +363,6 @@ void finalizeButcherTableauError(BUTCHER_TABLEAU *tableau, enum GB_NLS_METHOD nl
   }
 
   tableau->error.active = *selected;
-  tableau->error_order = tableau->error.active.order;
 }
 
 void setTTransformLowerTriangular(BUTCHER_TABLEAU *tableau, const double *A_part_inv, const double *T, const double *T_inv, const double *gamma, const double *alpha, const double *beta,
@@ -529,7 +527,7 @@ void getButcherTableau_ESDIRK2(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 3;
   tableau->order_b = 2;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac = 1.0;
 
   /* Butcher Tableau */
@@ -539,8 +537,9 @@ void getButcherTableau_ESDIRK2(BUTCHER_TABLEAU* tableau)
                       b1, b2, b3};
   const double b[] = {b1, b2, b3};
   const double bt[] = {bt1, bt2, bt3};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_ESDIRK2;
@@ -566,7 +565,7 @@ void getButcherTableau_ESDIRK3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 3;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 1.0;
 
   const double c[] = {                              0, 0.871733043016917998832038902387,                             0.6,                               1};
@@ -577,8 +576,9 @@ void getButcherTableau_ESDIRK3(BUTCHER_TABLEAU* tableau)
                           0.187641024346723825161292144167, -0.595297473576954948047823027586, 0.971789927721772123470511432226, 0.435866521508458999416019451194};
   const double b[] = {0.187641024346723825161292144167, -0.595297473576954948047823027586, 0.971789927721772123470511432226, 0.435866521508458999416019451194};
   const double bt[] = {0.10889661761586445415613073807, -0.915325811870712753481638097817, 1.27127359730215216784471589414, 0.535155596952696131480791465611};
+  const double d[] = { 0.5045601461279586354596287835486123678439, 1.728218980552248305649113796460735630048, -1.815583839409499246097890301433039079216, -0.4171952872707076950108522785763089186756 };
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_ESDIRK3;
@@ -616,7 +616,7 @@ void getButcherTableau_TSIT5(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {                              0,                           0.161,                           0.327,                             0.9, 0.980025540904509685729810286287,                               1,                               1};
@@ -630,8 +630,9 @@ void getButcherTableau_TSIT5(BUTCHER_TABLEAU* tableau)
                           0.0964607668180652295181673131651,                             0.01, 0.479889650414499574775249532291,  1.37900857410374189319227482186, -3.29006951543608067990104758571,   2.3247105240997739824153559184,                                0};
   const double b[] = {0.0964607668180652295181673131651,                            0.01, 0.479889650414499574775249532291, 1.37900857410374189319227482186, -3.29006951543608067990104758571,  2.3247105240997739824153559184,                               0};
   const double bt[] = {0.0982407778702910009615458637727, 0.0108164344596567469032236360634, 0.472008772404237578764934804618, 1.52371958127700480072943996983, -3.87242668088863590492098519636, 2.78279263002896092907699243723, -0.0151515151515151515151515151515};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_TSIT5;
@@ -657,7 +658,7 @@ void getButcherTableau_ESDIRK4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 6;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac      = 1.0;
 
   const double c[] = {                                         0,                                        0.5, 0.1464466094067262377995778189475754803576,                                      0.625,                                       1.04,                                          1};
@@ -670,8 +671,9 @@ void getButcherTableau_ESDIRK4(BUTCHER_TABLEAU* tableau)
                           -0.01558763503571650073772070605100653051431, -0.01558763503571650073772070605100653051431,  0.387657670913203331289370193410831477968, 0.5017726195721631659377339675717638134054, -0.1082550204139334957516627488805822303448,                                       0.25};
   const double b[] = {-0.01558763503571650073772070605100653051431, -0.01558763503571650073772070605100653051431,  0.387657670913203331289370193410831477968, 0.5017726195721631659377339675717638134054, -0.1082550204139334957516627488805822303448,                                       0.25};
   const double bt[] = {-0.09651334216818033766775798, -0.09651334216818033766775798, 0.5228199509962342402149691, 0.5205678646221884951929862, -0.08255805440762121384324234, 0.232196923125559153770803};
+  const double d[] = { 0.4636537504873047012939089153894567814992, 0.6242298150035046509741331430235164217198, -0.8122987824642326994061653130568978362419, -0.2005160046313442335285230221650190494894, 0.1808694076292252544354576515346282734526, -0.2559381860244576737688113747256845909402 };
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_ESDIRK4;
@@ -749,7 +751,7 @@ void getButcherTableau_ESDIRK4_7L2SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac      = 1.0;
 
   /* method from "Diagonally implicit Runge–Kutta methods for stiff ODEs" */
@@ -768,8 +770,9 @@ void getButcherTableau_ESDIRK4_7L2SA(BUTCHER_TABLEAU* tableau)
   const double b[] = { -0.4008516150096082530929209, -0.4008516150096082530929209, 0.9391524145239087406622502, 0.5185422838949311774570106, 0.7755100321672021568275568, -0.5565015005668255687609758, 0.125 };
 
   const double bt[] = { -0.2421068937666858433832573, -0.2421068937666858433832573, 0.6587096818817366195020213, 0.5004777357240689505957221, 0.7607872310157867135060883, -0.5714751468025063285693932, 0.1357142857142857039765005 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_C0_ESDIRK4_7L2SA;
@@ -807,7 +810,7 @@ void getButcherTableau_SDIRK3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 3;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 1.0;
 
   const double c[] = {0.4358665215084589994160194, 0.7179332607542294997080097,                               1};
@@ -818,8 +821,9 @@ void getButcherTableau_SDIRK3(BUTCHER_TABLEAU* tableau)
 
   const double b[] = {1.2084966491760100703364772, -0.644363170684469069752496, 0.4358665215084589994160194};
   const double bt[] = {0.825, 0.1226301276675510709204581, 0.05236987233244892907954193};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_SDIRK3;
   tableau->isKLeftAvailable = FALSE;
@@ -855,7 +859,7 @@ void getButcherTableau_SDIRK4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac = 1.0;
 
   const double c[] = {0.25, 0.75, 0.55, 0.5, 1.0};
@@ -867,8 +871,9 @@ void getButcherTableau_SDIRK4(BUTCHER_TABLEAU* tableau)
                           25./24.,    -49./48.,    125./16., -85./12., 0.25};
   const double b[]  = {25./24., -49./48., 125./16., -85./12., 0.25};
   const double bt[] = {59./48., -17./96., 225./32., -85./12., 0.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_SDIRK4;
@@ -904,7 +909,7 @@ void getButcherTableau_SDIRK2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 2;
   tableau->order_b = 2;
-  tableau->order_bt = 1;
+  tableau->order_embd = 1;
   tableau->fac = 1.0;
 
   /* Butcher Tableau */
@@ -913,8 +918,9 @@ void getButcherTableau_SDIRK2(BUTCHER_TABLEAU* tableau)
                       0.707106781186547524400844362104849, 0.29289321881345247559915563789};
   const double b[] = {0.707106781186547524400844362104849, 0.29289321881345247559915563789};
   const double bt[] = {0.585786437626904951198311275790301, 0.414213562373095048801688724209};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_SDIRK2;
   tableau->isKLeftAvailable = FALSE;
@@ -934,7 +940,7 @@ void getButcherTableau_MS(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 2;
   tableau->order_b = 2;
-  tableau->order_bt = 1;
+  tableau->order_embd = 1;
   tableau->fac = 1.0;
 
   /* Butcher Tableau */
@@ -943,8 +949,9 @@ void getButcherTableau_MS(BUTCHER_TABLEAU* tableau)
                       0.0, 0.0};
   const double b[] = {0.5, 0.5};
   const double bt[] = {1.0, 0.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -954,7 +961,7 @@ void getButcherTableau_HEUN(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 2;
   tableau->order_b = 2;
-  tableau->order_bt = 1;
+  tableau->order_embd = 1;
   tableau->fac = 1.0;
 
   /* Butcher Tableau */
@@ -963,8 +970,9 @@ void getButcherTableau_HEUN(BUTCHER_TABLEAU* tableau)
                       1.0, 0.0};
   const double b[] = {0.5, 0.5};
   const double bt[] = {1.0, 0.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -981,14 +989,15 @@ void getButcherTableau_EXPLEULER(BUTCHER_TABLEAU* tableau)
     const double A[] = {0.0};
     const double b[] = {1.0};
     const double* bt = NULL;
+    const double *d = NULL;
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = FALSE;
     tableau->isKRightAvailable = FALSE;
   } else {
     tableau->nStages = 2;
     tableau->order_b = 1;
-    tableau->order_bt = 2;
+    tableau->order_embd = 2;
     tableau->fac = 1.0;
 
     /* Butcher Tableau */
@@ -997,8 +1006,9 @@ void getButcherTableau_EXPLEULER(BUTCHER_TABLEAU* tableau)
                         0.5, 0.0};
     const double b[] = {1,0};     // explicit Euler step
     const double bt[] = {0,1};    // explicit midpoint rule corresponds to Richardson extrapolation
+    double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = TRUE;
     tableau->isKRightAvailable = FALSE;
   }
@@ -1019,14 +1029,15 @@ void getButcherTableau_RUNGEKUTTA(BUTCHER_TABLEAU* tableau)
                         0,   0,   1, 0};
     const double b[] = {0.166666666666666666666666666667, 0.333333333333333333333333333333, 0.333333333333333333333333333333, 0.166666666666666666666666666667};
     const double* bt = NULL;
+    const double* d = NULL;
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = FALSE;
     tableau->isKRightAvailable = FALSE;
   } else {
     tableau->nStages = 5;
     tableau->order_b = 4;
-    tableau->order_bt = 3;
+    tableau->order_embd = 3;
     tableau->fac = 1.0;
 
     /* Butcher Tableau */
@@ -1039,8 +1050,9 @@ void getButcherTableau_RUNGEKUTTA(BUTCHER_TABLEAU* tableau)
                             0.166666666666666666666666666667, 0.333333333333333333333333333333, 0.333333333333333333333333333333, 0.166666666666666666666666666667,                                0};
     const double b[] = {0.166666666666666666666666666667, 0.333333333333333333333333333333, 0.333333333333333333333333333333, 0.166666666666666666666666666667,                               0};
     const double bt[] = {0.166666666666666666666666666667, 0.333333333333333333333333333333, 0.333333333333333333333333333333, 0.0666666666666666666666666666667,                             0.1};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = TRUE;
     tableau->isKRightAvailable = FALSE;
   }
@@ -1059,7 +1071,7 @@ void getButcherTableau_RADAU_IA_2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 2;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.6666666666666666666666666666666666666667};
@@ -1068,8 +1080,9 @@ void getButcherTableau_RADAU_IA_2(BUTCHER_TABLEAU* tableau)
                                                                 0.25, 0.4166666666666666666666666666666666666667};
   const double b[] = {                                      0.25,                                       0.75};
   const double bt[] = {                                         1,                                          0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -1111,7 +1124,7 @@ void getButcherTableau_RADAU_IA_3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.3550510257216821901802715925294108608034, 0.8449489742783178098197284074705891391966};
@@ -1121,8 +1134,9 @@ void getButcherTableau_RADAU_IA_3(BUTCHER_TABLEAU* tableau)
                           0.1111111111111111111111111111111111111111, 0.5370223859435462728402311533676481384848, 0.1968154772236604258683861429918298896007};
   const double b[] = {0.1111111111111111111111111111111111111111, 0.5124858261884216138388134465196080942213, 0.3764030627004672750500754423692807946676};
   const double bt[] = {                                        -1,  2.428869016623520557281749043578436645313, -0.4288690166235205572817490435784366453135};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -1168,7 +1182,7 @@ void getButcherTableau_RADAU_IA_4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.2123405382391529439747581101240003766519, 0.5905331355592652891350737479311701059481, 0.9114120404872960526044538562305438031143};
@@ -1179,8 +1193,9 @@ void getButcherTableau_RADAU_IA_4(BUTCHER_TABLEAU* tableau)
                                                               0.0625,  0.323205386248104141430923784055699840505, 0.4127071749160357251796800191634554619301, 0.1129994793231561859938500530113885006791};
   const double b[] = {                                    0.0625,  0.328844319980059743944289221072796831749, 0.3881934688431718807802323068900171791981, 0.2204622111767683752754784720371859890529};
   const double bt[] = {                                      2.25, -4.124358471244279153469290371543906361858,  3.876716114985737071643109056279287626538,  -1.00235764374145791817381868473538126468};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -1244,7 +1259,7 @@ void getButcherTableau_RADAU_IIA_2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 2;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.3333333333333333333333333333333333333333,                                          1};
@@ -1253,8 +1268,9 @@ void getButcherTableau_RADAU_IIA_2(BUTCHER_TABLEAU* tableau)
                                                                 0.75,                                       0.25};
   const double b[] = {                                      0.75,                                       0.25};
   const double bt[] = {                                       1.5,                                       -0.5};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1316,7 +1332,7 @@ void getButcherTableau_RADAU_IIA_3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.1550510257216821901802715925294108608034, 0.6449489742783178098197284074705891391966,                                          1};
@@ -1326,8 +1342,9 @@ void getButcherTableau_RADAU_IIA_3(BUTCHER_TABLEAU* tableau)
                           0.3764030627004672750500754423692807946676, 0.5124858261884216138388134465196080942213, 0.1111111111111111111111111111111111111111};
   const double b[] = {0.3764030627004672750500754423692807946676, 0.5124858261884216138388134465196080942213, 0.1111111111111111111111111111111111111111};
   const double bt[] = {-0.4288690166235205572817490435784366453135,  2.428869016623520557281749043578436645313,                                         -1};
+  const double d[] = { 0.1230673987862468281866191906018004195094, -0.2928752906999129785231307493997957024869, 0.1698078919136661503365115587979952829775 };
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1400,7 +1417,7 @@ void getButcherTableau_RADAU_IIA_4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.08858795951270394739554614376945619688573, 0.4094668644407347108649262520688298940519, 0.7876594617608470560252418898759996233481,                                          1};
@@ -1411,8 +1428,9 @@ void getButcherTableau_RADAU_IIA_4(BUTCHER_TABLEAU* tableau)
                           0.2204622111767683752754784720371859890529, 0.3881934688431718807802323068900171791981,  0.328844319980059743944289221072796831749,                                     0.0625};
   const double b[] = {0.2204622111767683752754784720371859890529, 0.3881934688431718807802323068900171791981,  0.328844319980059743944289221072796831749,                                     0.0625};
   const double bt[] = { 1.443282066094994668724775628809753242785, -3.100329177299393310082644442499253268142,  4.782047111204398641357868813689500025357,                                     -2.125};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1486,7 +1504,7 @@ void getButcherTableau_RADAU_IIA_5(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = { 0.05710419611451768219312119255411562123507794559875, 0.27684301363812382768004599768562514111088916969503, 0.58359043236891682005669766866291724869343263989677, 0.86024013565621944784791291887511976673837802258723, 1.0 };
@@ -1500,8 +1518,9 @@ void getButcherTableau_RADAU_IIA_5(BUTCHER_TABLEAU* tableau)
 
   const double b[] = { 0.14371356079122594132341221985411022715892296173188, 0.28135601514946206019217265034065989120000299266737, 0.31182652297574125408185491157664052198806076863409, 0.22310390108357074440256021822858935965301327696665, 0.04 };
   const double bt[] = { -0.3273572880280475179868889735847914204879, 1.732626055715213045955200342283536620404, -1.906441155627866383675385786616933133121, 2.501172387940700855707074417918187933204, -1.0 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1585,7 +1604,7 @@ void getButcherTableau_RADAU_IIA_6(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 6;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = { 0.039809857051468742340806690093333167704262654228385, 0.19801341787360817253579213679529623603818635883379, 0.43797481024738614400501252000522885251679027421474, 0.69546427335363609451461482372116716139400155499865, 0.90146491420117357387650110211224730961948643045171, 1.0 };
@@ -1600,8 +1619,9 @@ void getButcherTableau_RADAU_IIA_6(BUTCHER_TABLEAU* tableau)
 
   const double b[] = { 0.1007941926267404201046003778745677818586739544979, 0.20845066715595386947970319137132312166770750468809, 0.26046339159478749128511470328476850990576171084536, 0.2426935942344849580799139577934448339939675840621, 0.15982037661025548327288999189811797479611146812877, 0.027777777777777777777777777777777777777777777777778 };
   const double bt[] = { 0.4914223436619063359229674710991495189894, -1.044400345815271427668262344714238545442, 2.343267309489758677412225550810475596188, -2.290783854394384686825360119129050716831, 2.500494547057991101158429441933664147096, -1.0 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1687,7 +1707,7 @@ void getButcherTableau_RADAU_IIA_7(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 2*tableau->nStages - 1;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = { 0.029316427159784891972050276913164910373730392563715, 0.14807859966848429184997685249597921223024877480859, 0.33698469028115429909705297208077570519756875002847, 0.55867151877155013208139334180552194007436828896541, 0.7692338620300545009168833601156454518371421433223, 0.92694567131974111485187396581968201105617241954228, 1.0 };
@@ -1703,8 +1723,9 @@ void getButcherTableau_RADAU_IIA_7(BUTCHER_TABLEAU* tableau)
 
   const double b[] = { 0.074494235556010317933248780209166920975326449423939, 0.15910211573365074087243521723493418210816301632787, 0.21235188950297780419915401957510412235603856069468, 0.22355491450728323474967447682122101798551083778481, 0.19047493682211557690296917393806276186714739147125, 0.11961374461265620289353874038477630083026272388929, 0.020408163265306122448979591836734693877551020408163 };
   const double bt[] = { -0.2593076755258768633646696264711447439871, 1.255469459350560084324287142896233783625, -1.698403593561285638182740271940617400542, 2.747862898245942093124032369910816949049, -2.543660856123370685801973692928840823266, 2.498039767614031009901064078533552235122, -1.0 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1766,7 +1787,7 @@ void getButcherTableau_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0,                                        0.5,                                          1};
@@ -1776,8 +1797,9 @@ void getButcherTableau_LOBATTO_IIIA_3(BUTCHER_TABLEAU* tableau)
                           0.1666666666666666666666666666666666666667, 0.6666666666666666666666666666666666666667, 0.1666666666666666666666666666666666666667};
   const double b[] = {0.1666666666666666666666666666666666666667, 0.6666666666666666666666666666666666666667, 0.1666666666666666666666666666666666666667};
   const double bt[] = {                                      -0.5,                                          2,                                       -0.5};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1828,7 +1850,7 @@ void getButcherTableau_LOBATTO_IIIA_4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.2763932022500210303590826331268723764559, 0.7236067977499789696409173668731276235441,                                          1};
@@ -1839,8 +1861,9 @@ void getButcherTableau_LOBATTO_IIIA_4(BUTCHER_TABLEAU* tableau)
                           0.08333333333333333333333333333333333333333, 0.4166666666666666666666666666666666666667, 0.4166666666666666666666666666666666666667, 0.08333333333333333333333333333333333333333};
   const double b[] = {0.08333333333333333333333333333333333333333, 0.4166666666666666666666666666666666666667, 0.4166666666666666666666666666666666666667, 0.08333333333333333333333333333333333333333};
   const double bt[] = { 1.333333333333333333333333333333333333333, -2.378418305208070453844800419247428627634,  3.211751638541403787178133752580761960967, -1.166666666666666666666666666666666666667};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -1894,7 +1917,7 @@ void getButcherTableau_LOBATTO_IIIB_3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0,                                        0.5,                                          1};
@@ -1904,8 +1927,9 @@ void getButcherTableau_LOBATTO_IIIB_3(BUTCHER_TABLEAU* tableau)
                           0.1666666666666666666666666666666666666667, 0.8333333333333333333333333333333333333333,                                          0};
   const double b[] = {0.1666666666666666666666666666666666666667, 0.6666666666666666666666666666666666666667, 0.1666666666666666666666666666666666666667};
   const double bt[] = {                                      -0.5,                                          2,                                       -0.5};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -1949,7 +1973,7 @@ void getButcherTableau_LOBATTO_IIIB_4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.2763932022500210303590826331268723764559, 0.7236067977499789696409173668731276235441,                                          1};
@@ -1960,8 +1984,9 @@ void getButcherTableau_LOBATTO_IIIB_4(BUTCHER_TABLEAU* tableau)
                           0.08333333333333333333333333333333333333333, 0.3651638342708420959829510971361968235233, 0.5515028323958245706837155695304698431434,                                          0};
   const double b[] = {0.08333333333333333333333333333333333333333, 0.4166666666666666666666666666666666666667, 0.4166666666666666666666666666666666666667, 0.08333333333333333333333333333333333333333};
   const double bt[] = { 1.333333333333333333333333333333333333333, -2.378418305208070453844800419247428627634,  3.211751638541403787178133752580761960967, -1.166666666666666666666666666666666666667};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -2007,7 +2032,7 @@ void getButcherTableau_LOBATTO_IIIC_3(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0., .500000000000000000000000000000000000000000000000000000000000, 1.};
@@ -2017,8 +2042,9 @@ void getButcherTableau_LOBATTO_IIIC_3(BUTCHER_TABLEAU* tableau)
                           .166666666666666666666666666666666666666666666666666666666666, .666666666666666666666666666666666666666666666666666666666668, .166666666666666666666666666666666666666666666666666666666666};
   const double b[] = {.166666666666666666666666666666666666666666666666666666666666, .66666666666666666666666666666666666666666666666666666666667, .166666666666666666666666666666666666666666666666666666666666};
   const double bt[] = {-.50000000000000000000000000000000000000000000000000000000000, 2.00000000000000000000000000000000000000000000000000000000000, -.500000000000000000000000000000000000000000000000000000000000};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -2065,7 +2091,7 @@ void getButcherTableau_LOBATTO_IIIC_4(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages - 2;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {                                         0, 0.2763932022500210303590826331268723764559, 0.7236067977499789696409173668731276235441,                                          1};
@@ -2076,8 +2102,9 @@ void getButcherTableau_LOBATTO_IIIC_4(BUTCHER_TABLEAU* tableau)
                           0.08333333333333333333333333333333333333333, 0.4166666666666666666666666666666666666667, 0.4166666666666666666666666666666666666667, 0.08333333333333333333333333333333333333333};
   const double b[] = {0.08333333333333333333333333333333333333333, 0.4166666666666666666666666666666666666667, 0.4166666666666666666666666666666666666667, 0.08333333333333333333333333333333333333333};
   const double bt[] = { 1.333333333333333333333333333333333333333, -2.378418305208070453844800419247428627634,  3.211751638541403787178133752580761960967, -1.166666666666666666666666666666666666667};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -2126,7 +2153,7 @@ void getButcherTableau_GAUSS2(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 2;
   tableau->order_b = 2*tableau->nStages;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double sqrt3 = sqrt(3);
@@ -2147,8 +2174,9 @@ void getButcherTableau_GAUSS2(BUTCHER_TABLEAU* tableau)
                       };
   const double b[] = {b1, b2};    // implicit Gauss-Legendre rule
   const double bt[] = {bt1, bt2}; // Embedded method (order 1)
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -2192,7 +2220,7 @@ void getButcherTableau_GAUSS3(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 3;
   tableau->order_b = 2*tableau->nStages;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.112701665379258311482073460022,                             0.5, 0.887298334620741688517926539978};
@@ -2202,8 +2230,9 @@ void getButcherTableau_GAUSS3(BUTCHER_TABLEAU* tableau)
                           0.267988333762469451728197735546,  0.48042111196938334790083991554, 0.138888888888888888888888888886};
   const double b[] = {0.277777777777777777777777777778, 0.444444444444444444444444444443, 0.277777777777777777777777777778};
   const double bt[] = {-0.833333333333333333333333333333, 2.66666666666666666666666666666, -0.833333333333333333333333333333};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -2255,7 +2284,7 @@ void getButcherTableau_GAUSS4(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 4;
   tableau->order_b = 2*tableau->nStages;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.06943184420297371238802675555359524745214, 0.3300094782075718675986671204483776563997, 0.6699905217924281324013328795516223436003, 0.9305681557970262876119732444464047525479};
@@ -2266,8 +2295,9 @@ void getButcherTableau_GAUSS4(BUTCHER_TABLEAU* tableau)
                           0.177482572254522611843442956460569292214, 0.3134451147418683467984111448143822028166, 0.3526767575162718646268531558659534057085, 0.08696371128436346434326598730549985180884};
   const double b[] = {0.1739274225687269286865319746109997036177, 0.3260725774312730713134680253890002963823, 0.3260725774312730713134680253890002963823, 0.1739274225687269286865319746109997036177};
   const double bt[] = { 2.029062439578463454986692572724958069163,  -4.37278977445749213150196088214782025746,  5.024934929320038274128896932925820850225, -1.681207594441009597613628623502958661928};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -2318,7 +2348,7 @@ void getButcherTableau_GAUSS5(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 5;
   tableau->order_b = 2*tableau->nStages;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
 
   const double c[] = {0.04691007703066800360118656085030351743717, 0.2307653449471584544818427896498955975164,                                        0.5, 0.7692346550528415455181572103501044024836, 0.9530899229693319963988134391496964825628};
@@ -2330,8 +2360,9 @@ void getButcherTableau_GAUSS5(BUTCHER_TABLEAU* tableau)
                           0.1168753295602285452177667778893652650845, 0.2449081289104954188974634793822950246717, 0.2731900436258014888917282002293536956714, 0.2588846996087592715132889714687031564744, 0.05923172126404727187856601017997934066082};
   const double b[] = {0.1184634425280945437571320203599586813216, 0.2393143352496832340206457574178190964561, 0.2844444444444444444444444444444444444444, 0.2393143352496832340206457574178190964561, 0.1184634425280945437571320203599586813216};
   const double bt[] = {-3.549480780358140059259512996235616229578,  10.62725855813591783703729077401339400736, -13.15555555555555555555555555555555555556,  10.62725855813591783703729077401339400736, -3.549480780358140059259512996235616229578};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
   tableau->withDenseOutput = TRUE;
@@ -2391,7 +2422,7 @@ void getButcherTableau_GAUSS6(BUTCHER_TABLEAU* tableau)
 
   tableau->nStages = 6;
   tableau->order_b = 2*tableau->nStages;
-  tableau->order_bt = tableau->nStages - 1;
+  tableau->order_embd = tableau->nStages - 1;
   tableau->fac = 1.0;
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_GAUSS6;
@@ -2406,8 +2437,9 @@ void getButcherTableau_GAUSS6(BUTCHER_TABLEAU* tableau)
                           0.08647502636084993463244720673792898683032, 0.1775263532089699686539874710887420342971,  0.239625825335829035595856428410992003968, 0.2246319165798677725034962874867723488175, 0.1951445125212667162602893479793787072728, 0.04283112309479258626007403554318322338171};
   const double b[] = {0.08566224618958517252014807108636644676341, 0.1803807865240693037849167569188580558308, 0.2339569672863455236949351719947754974058, 0.2339569672863455236949351719947754974058, 0.1803807865240693037849167569188580558308, 0.08566224618958517252014807108636644676341};
   const double bt[] = { 8.226923975198260790695004480367583058809, -24.35335795417146225501811412781707093571,  36.40229746275844889842270132076392111778, -35.93438352818575785103283097677437012297,  24.71411952721960086258794764165478704738, -8.055599482819090445654708338194850165283};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
 
@@ -2457,14 +2489,15 @@ void getButcherTableau_IMPLEULER(BUTCHER_TABLEAU* tableau)
     const double A[] = {1.0};
     const double b[] = {1.0};
     const double* bt = NULL;
+    const double *d = NULL;
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = FALSE;
     tableau->isKRightAvailable = FALSE;
   } else {
     tableau->nStages  = 2;
     tableau->order_b  = 1;
-    tableau->order_bt = 2;
+    tableau->order_embd = 2;
     tableau->fac      = 1.e0;
 
     /* Butcher Tableau */
@@ -2473,8 +2506,9 @@ void getButcherTableau_IMPLEULER(BUTCHER_TABLEAU* tableau)
                         0.0, 1.0};
     const double b[] = {0.0, 1.0};  // implicit Euler step
     const double bt[] = {0.5, 0.5}; // trapezoidal rule for error estimator
+    double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-    setButcherTableau(tableau, c, A, b, bt);
+    setButcherTableau(tableau, c, A, b, d);
     tableau->isKLeftAvailable = TRUE;
     tableau->isKRightAvailable = TRUE;
   }
@@ -2494,7 +2528,7 @@ void getButcherTableau_TRAPEZOID(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages  = 2;
   tableau->order_b  = 2;
-  tableau->order_bt = 1;
+  tableau->order_embd = 1;
   tableau->fac      = 1.e0;
 
   // /* Butcher Tableau */
@@ -2503,8 +2537,9 @@ void getButcherTableau_TRAPEZOID(BUTCHER_TABLEAU* tableau)
                       0.5, 0.5};
   const double b[] = {0.5, 0.5};  // trapezoidal rule
   const double bt[] = {0.0, 1.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_TRAPEZOID;
@@ -2517,7 +2552,7 @@ void getButcherTableau_MERSON(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac = 1e5;
 
   /* Butcher Tableau */
@@ -2530,8 +2565,9 @@ void getButcherTableau_MERSON(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {1./6,  0.0,   0.0,  2./3,  1./6};   // 4th order
   const double bt[] = {1./10, 0.0, 3./10,  2./5,  1./5};   // 3th order
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2540,7 +2576,7 @@ void getButcherTableau_MERSONSSC1(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 1;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2553,8 +2589,9 @@ void getButcherTableau_MERSONSSC1(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {0.512782397120662718471749459233, 0.330103091995730873405418477521, 0.146713304970630735231072129528, 0.0103570041584038638446238467251, 4.42017545718090471360869927930e-05};
   const double bt[] = {1./6,  0.0,   0.0,  2./3,  1./6};   // 4th order
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2563,7 +2600,7 @@ void getButcherTableau_MERSONSSC2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 2;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2576,8 +2613,9 @@ void getButcherTableau_MERSONSSC2(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {-0.35629337268078937564325457003, 0.146074652453948837652304806997, 0.934217301122925451486796787885, 0.272197473925746365767707013552, 0.00380394517816872073644596159715};
   const double bt[] = {1./6,  0.0,   0.0,  2./3,  1./6};   // 4th order
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2601,7 +2639,7 @@ void getButcherTableau_DOPRI45(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2616,8 +2654,9 @@ void getButcherTableau_DOPRI45(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {35./384, 0.0, 500./1113, 125./192, -2187./6784, 11./84, 0.0};
   const double bt[] = {5179./57600, 0.0, 7571./16695, 393./640, -92097./339200, 187./2100, 1./40};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_DOPRI45;
@@ -2630,7 +2669,7 @@ void getButcherTableau_DOPRISSC1(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 1;
-  tableau->order_bt = 5;
+  tableau->order_embd = 5;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2645,8 +2684,9 @@ void getButcherTableau_DOPRISSC1(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {0.278585202707552297491652379451, 0.499359343897282505016199003177, 0.21994590092478885648226620836, 0.00221513041070919707891834807597, -0.000108554006807565712812909262366, 2.90820039199235629183419683848e-06, 6.78660827172874851360023304864e-08};
   const double bt[] = {35./384, 0.0, 500./1113, 125./192, -2187./6784, 11./84, 0.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_DOPRI45;
@@ -2659,7 +2699,7 @@ void getButcherTableau_DOPRISSC2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 2;
-  tableau->order_bt = 5;
+  tableau->order_embd = 5;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2674,8 +2714,9 @@ void getButcherTableau_DOPRISSC2(BUTCHER_TABLEAU* tableau)
                         };
   const double b[] = {-0.486346436598901828254513839047, -0.234874439261298143693150869933, 1.65868062062825029557032033231, 0.0708767352953961545635216713703, -0.00905214141822685142604628709823, 0.000667704407394041424018354604235, 4.79569473863318158506377905590e-05};
   const double bt[] = {35./384, 0.0, 500./1113, 125./192, -2187./6784, 11./84, 0.0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
 
   tableau->withDenseOutput = TRUE;
   tableau->dense_output = denseOutput_DOPRI45;
@@ -2688,7 +2729,7 @@ void getButcherTableau_FEHLBERG12(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 2;
-  tableau->order_bt = 1;
+  tableau->order_embd = 1;
   tableau->fac = 1e3;
 
   /* Butcher Tableau */
@@ -2698,8 +2739,9 @@ void getButcherTableau_FEHLBERG12(BUTCHER_TABLEAU* tableau)
                        1./256., 255./256., 0.0};
   const double b[] = {1./256., 255./256., 0.0};
   const double bt[] = {1./512., 255./256., 1./512.};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2709,7 +2751,7 @@ void getButcherTableau_FEHLBERG45(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 6;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1e3;
 
   /* Butcher Tableau */
@@ -2723,8 +2765,9 @@ void getButcherTableau_FEHLBERG45(BUTCHER_TABLEAU* tableau)
                         -0.296296296296296296296296296296,                                2, -1.38167641325536062378167641326, 0.452972709551656920077972709552,                             -0.275,                              0};
   const double b[] = {0.121296296296296296296296296296, -0.0304761904761904761904761904762, 0.578869395711500974658869395712, 0.516977165135059871901977165135, -0.186666666666666666666666666667,                               0};
   const double bt[] = {0.115740740740740740740740740741,                               0, 0.548927875243664717348927875244,    0.535331384015594541910331384016,                              -0.2,                               0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2734,7 +2777,7 @@ void getButcherTableau_FEHLBERG78(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 13;
   tableau->order_b = 8;
-  tableau->order_bt = 7;
+  tableau->order_embd = 7;
   tableau->fac = 1e3;
 
   /* Butcher Tableau */
@@ -2755,8 +2798,9 @@ void getButcherTableau_FEHLBERG78(BUTCHER_TABLEAU* tableau)
                           -0.433414634146341463414634146341,                                0,                                0, -2.07926829268292682926829268293,  4.38634146341463414634146341463, -3.52439024390243902439024390244, 0.534878048780487804878048780488, 0.621951219512195121951219512195, 0.201219512195121951219512195122, 0.292682926829268292682926829268,                                0,                                1,                                0};
   const double b[] = {                              0,                               0,                               0,                               0,                               0, 0.32380952380952380952380952381, 0.257142857142857142857142857143, 0.257142857142857142857142857143, 0.0321428571428571428571428571429, 0.0321428571428571428571428571429,                               0, 0.0488095238095238095238095238095, 0.0488095238095238095238095238095};
   const double bt[] = {0.0488095238095238095238095238095,                               0,                               0,                               0,                               0, 0.32380952380952380952380952381, 0.257142857142857142857142857143, 0.257142857142857142857142857143, 0.0321428571428571428571428571429, 0.0321428571428571428571428571429, 0.0488095238095238095238095238095,                               0,                               0};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2765,7 +2809,7 @@ void getButcherTableau_FEHLBERGSSC1(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 13;
   tableau->order_b = 1;
-  tableau->order_bt = 8;
+  tableau->order_embd = 8;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2786,8 +2830,9 @@ void getButcherTableau_FEHLBERGSSC1(BUTCHER_TABLEAU* tableau)
                           -0.433414634146341463414634146341,                                0,                                0, -2.07926829268292682926829268293,  4.38634146341463414634146341463, -3.52439024390243902439024390244, 0.534878048780487804878048780488, 0.621951219512195121951219512195, 0.201219512195121951219512195122, 0.292682926829268292682926829268,                                0,                                1,                                0};
   const double b[] = {-0.364851774598758815913721254923, 0.301330765163132508037187549082,  0.8325767564796758519952730731,                               0, -0.0268487161606468393107786573864, 0.0959117920564658481117857153644, -0.0286739781279975214853581446154, 0.213522659333043888240291858263, -0.00908604512512093286675314270667, 0.00681453439485641598976617630506, 0.0103479967072222251389783702879, -0.0310439901218725048480067038039, -1.23088664838968206937943710922e-16};
   const double bt[] = {                              0,                               0,                               0,                               0,                               0, 0.32380952380952380952380952381, 0.257142857142857142857142857143, 0.257142857142857142857142857143, 0.0321428571428571428571428571429, 0.0321428571428571428571428571429,                               0, 0.0488095238095238095238095238095, 0.0488095238095238095238095238095};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2796,7 +2841,7 @@ void getButcherTableau_FEHLBERGSSC2(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 13;
   tableau->order_b = 2;
-  tableau->order_bt = 8;
+  tableau->order_embd = 8;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2817,8 +2862,9 @@ void getButcherTableau_FEHLBERGSSC2(BUTCHER_TABLEAU* tableau)
                         -0.433414634146341463414634146341,                                0,                                0, -2.07926829268292682926829268293,  4.38634146341463414634146341463, -3.52439024390243902439024390244, 0.534878048780487804878048780488, 0.621951219512195121951219512195, 0.201219512195121951219512195122, 0.292682926829268292682926829268,                                0,                                1,                                0};
   const double b[] = {1.36308696433418349654697814366,                               0, -3.26459140897742935132414339163, -1.62051733050260843967905937243, -0.29368516237586603628166052316,  1.8370371692484130907915149173, -0.526247844078595836398397402697, 3.92724305645149417982124010038, -0.167071106248436357738384607217, 0.12530612140680376084342193382, 0.190280224596084454633821394807, -0.570840683836337962747432519784, -1.77049984678986730541092039109e-11};
   const double bt[] = {                              0,                               0,                               0,                               0,                               0, 0.32380952380952380952380952381, 0.257142857142857142857142857143, 0.257142857142857142857142857143, 0.0321428571428571428571428571429, 0.0321428571428571428571428571429,                               0, 0.0488095238095238095238095238095, 0.0488095238095238095238095238095};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2828,7 +2874,7 @@ void getButcherTableau_RK810(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 17;
   tableau->order_b = 10;
-  tableau->order_bt = 8;
+  tableau->order_embd = 8;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2853,8 +2899,9 @@ void getButcherTableau_RK810(BUTCHER_TABLEAU* tableau)
                           0.181781300700095283888472062582,                            0.675, 0.342758159847189839942220553414,                                0, 0.259111214548322744512977076192, -0.358278966717952089048961276722, -1.04594895940883306095050068756, 0.930327845415626983292300564432,  1.77950959431708102446142106795,                              0.1, -0.282547569539044081612477785222, -0.159327350119972549169261984373, -0.145515894647001510860991961081, -0.259111214548322744512977076192, -0.342758159847189839942220553414,                           -0.675,                                0};
   const double b[] = {0.0333333333333333333333333333333,                           0.025, 0.0333333333333333333333333333333,                               0,                            0.05,                               0,                            0.04,                               0, 0.189237478148923490158306404106, 0.277429188517743176508360262561, 0.277429188517743176508360262561, 0.189237478148923490158306404106,                           -0.04,                           -0.05, -0.0333333333333333333333333333333,                          -0.025, 0.0333333333333333333333333333333};
   const double bt[] = {0.0333333333333333333333333333333, 0.0277777777777777777777777777778, 0.0333333333333333333333333333333,                               0,                            0.05,                               0,                            0.04,                               0, 0.189237478148923490158306404106, 0.277429188517743176508360262561, 0.277429188517743176508360262561, 0.189237478148923490158306404106,                           -0.04,                           -0.05, -0.0333333333333333333333333333333, -0.0277777777777777777777777777778, 0.0333333333333333333333333333333};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2864,7 +2911,7 @@ void getButcherTableau_RK1012(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 25;
   tableau->order_b = 12;
-  tableau->order_bt = 10;
+  tableau->order_embd = 10;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2897,8 +2944,9 @@ void getButcherTableau_RK1012(BUTCHER_TABLEAU* tableau)
                           1.47178724881110408452949550989,                           0.7875, 0.421296296296296296296296296296,                                0, 0.291666666666666666666666666667,                                0,  0.34860071762832956320685442163, 0.229499544768994849582890233711,  5.79046485790481979159831978177, 0.418587511856506868874073759427,  0.30703988022247400264965381749, -4.68700905350603332214256344684,    3.135716655938022621520381524,  1.40134829710965720817510506276, -5.52931101439499023629010306006, -0.853138235508063349309546894975, 0.103575780373610140411804607168, -0.140474416950600941142546901202, -0.418587511856506868874073759427, -0.229499544768994849582890233711, -0.34860071762832956320685442163, -0.291666666666666666666666666667, -0.421296296296296296296296296296,                          -0.7875,                                0};
   const double b[] = {0.0238095238095238095238095238095,                       0.0234375,                         0.03125,                               0, 0.0416666666666666666666666666667,                               0,                            0.05,                            0.05,                               0,                             0.1, 0.0714285714285714285714285714286,                               0, 0.138413023680782974005350203145, 0.215872690604931311708935511141, 0.24380952380952380952380952381, 0.215872690604931311708935511141, 0.138413023680782974005350203145, -0.0714285714285714285714285714286,                            -0.1,                           -0.05,                           -0.05, -0.0416666666666666666666666666667,                        -0.03125,                      -0.0234375, 0.0238095238095238095238095238095};
   const double bt[] = {0.0238095238095238095238095238095,                             0.1,                         0.03125,                               0, 0.0416666666666666666666666666667,                               0,                            0.05,                            0.05,                               0,                             0.1, 0.0714285714285714285714285714286,                               0, 0.138413023680782974005350203145, 0.215872690604931311708935511141, 0.24380952380952380952380952381, 0.215872690604931311708935511141, 0.138413023680782974005350203145, -0.0714285714285714285714285714286,                            -0.1,                           -0.05,                           -0.05, -0.0416666666666666666666666666667,                        -0.03125,                            -0.1, 0.0238095238095238095238095238095};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2908,7 +2956,7 @@ void getButcherTableau_RK1214(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 35;
   tableau->order_b = 14;
-  tableau->order_bt = 12;
+  tableau->order_embd = 12;
   tableau->fac = 1e0;
 
   /* Butcher Tableau */
@@ -2951,8 +2999,9 @@ void getButcherTableau_RK1214(BUTCHER_TABLEAU* tableau)
                             0.2858351403889715587960888421638364148529275378946,   0.29166666666666666666666666666666666666666666666667,                                                0.21875,                                                      0,                                              0.1640625,                                                      0,   0.21819435494555665832718824158135210709328882432219,   0.18039289847869776686363522194677543771962005364185,                                                      0,   0.20571383940484501885912075512292954227757009498281,   0.24271579158177023997028292795944651576274597138667,   0.24646578081362930583360929118189140779922810386931,   -3.4499194079089082497983415460162266206037046061493,   0.22887556216003608176072906073845858429422037255274,   0.28329059970215141532152741905673333597843659549386,    3.2108512583776664096013149054423678700555732033224,  -0.22353877736484569992023375621416250796412523008367,  -0.70712115720441907351872728620748721213009123195521,    3.2112334515028708040817472920285650089326003444302,    1.4095434830966976603041447430112317576904594557355,  -0.15136205344374261312160227674251811109096302620368,   0.37235057452701427645472408021461998439712102820215,   0.25297874640636133672219990776214128591577572812941,   -3.2108512583776664096013149054423678700555732033224,  -0.28329059970215141532152741905673333597843659549386,  -0.22887556216003608176072906073845858429422037255274,  -0.24646578081362930583360929118189140779922810386931,  -0.24271579158177023997028292795944651576274597138667,  -0.20571383940484501885912075512292954227757009498281,  -0.18039289847869776686363522194677543771962005364185,  -0.21819435494555665832718824158135210709328882432219,                                             -0.1640625,                                               -0.21875,  -0.29166666666666666666666666666666666666666666666667,                                                      0};
   const double b[] = { 0.017857142857142857142857142857142857142857142857143,                                            0.005859375,                                             0.01171875,                                                      0,                                            0.017578125,                                                      0,                                              0.0234375,                                            0.029296875,                                                      0,                                             0.03515625,                                            0.041015625,                                               0.046875,                                                      0,                                            0.052734375,                                             0.05859375,                                            0.064453125,                                                      0,   0.10535211357175301969149603288787816222767308308052,   0.17056134624175218238212033855387408588755548780279,   0.20622939732935194078352648570110489474191428625954,   0.20622939732935194078352648570110489474191428625954,   0.17056134624175218238212033855387408588755548780279,   0.10535211357175301969149603288787816222767308308052,                                           -0.064453125,                                            -0.05859375,                                           -0.052734375,                                              -0.046875,                                           -0.041015625,                                            -0.03515625,                                           -0.029296875,                                             -0.0234375,                                           -0.017578125,                                            -0.01171875,                                           -0.005859375,  0.017857142857142857142857142857142857142857142857143};
   const double bt[] = { 0.017857142857142857142857142857142857142857142857143,                                            0.004859375,                                             0.01171875,                                                      0,                                            0.017578125,                                                      0,                                              0.0234375,                                            0.029296875,                                                      0,                                             0.03515625,                                            0.041015625,                                               0.046875,                                                      0,                                            0.052734375,                                             0.05859375,                                            0.064453125,                                                      0,   0.10535211357175301969149603288787816222767308308052,   0.17056134624175218238212033855387408588755548780279,   0.20622939732935194078352648570110489474191428625954,   0.20622939732935194078352648570110489474191428625954,   0.17056134624175218238212033855387408588755548780279,   0.10535211357175301969149603288787816222767308308052,                                           -0.064453125,                                            -0.05859375,                                           -0.052734375,                                              -0.046875,                                           -0.041015625,                                            -0.03515625,                                           -0.029296875,                                             -0.0234375,                                           -0.017578125,                                            -0.01171875,                                           -0.004859375,  0.017857142857142857142857142857142857142857142857143};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = TRUE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -2968,7 +3017,7 @@ void getButcherTableau_RKSSC(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 1;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 7;
 
   const double c[] = {                              0,               0.041324301621055,                    0.1611647763,                    0.3608883044,                      0.64049984};
@@ -2980,8 +3029,9 @@ void getButcherTableau_RKSSC(BUTCHER_TABLEAU* tableau)
                                         0.1570787892802991,                0.237958302195982,               0.1631711307360486,               0.0822916178203657,                                0};
   const double b[] = {             0.1945277188657676,              0.3151822878089125,              0.2437005934695969,              0.1641555613805598,              0.0824338384751631};
   const double bt[] = {         0.12149281854707711872,          0.18276003767888932578,          0.14735209191059650291,         -0.42005655782840578172,          0.96845160969184283432};
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = FALSE;
 }
@@ -3003,7 +3053,7 @@ void getButcherTableau_SIRK3_2_4L3SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 4;
   tableau->order_b = 3;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3024,8 +3074,9 @@ void getButcherTableau_SIRK3_2_4L3SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       2.134246984384455698748982306489579869292, -2.028619792060449745592048286001129035046, 1.549520621184347866521330102219073696991, -0.6551478135083538196782641227085671530116
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3085,7 +3136,7 @@ void getButcherTableau_SIRK3_2_5L3SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 3;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3107,8 +3158,9 @@ void getButcherTableau_SIRK3_2_5L3SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.8458492124678900658111292150057927472306, -0.4312399966104417037434353049736868507957, 0.1941680310721804437429846883697167017554, 0.4665698029589058647161120257450054501929, -0.07534704988853467052679062414654394582976
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3172,7 +3224,7 @@ void getButcherTableau_SIRK4_3_5L3SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3194,8 +3246,9 @@ void getButcherTableau_SIRK4_3_5L3SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       2.012234317718305184354922503528720352839, -2.381690182330916481822647661299340365161, 0.1397227027143164100299340954514151781168, 2.995827050337972206074480679491729566073, -1.766093888439677318636689617173804137383
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3259,7 +3312,7 @@ void getButcherTableau_SIRK5_4_5L3SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3281,8 +3334,9 @@ void getButcherTableau_SIRK5_4_5L3SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       5.861568995310649069921130261302657126537, -8.44970314912743086604733955839757695098, 5.846255584441229577308713080703608757618, -4.069131780807692427665574028573051835764, 1.811010350183244646483070244964469734598
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3347,7 +3401,7 @@ void getButcherTableau_SIRK4_3_6L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 6;
   tableau->order_b = 4;
-  tableau->order_bt = 3;
+  tableau->order_embd = 3;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3370,8 +3424,9 @@ void getButcherTableau_SIRK4_3_6L4SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.8826150461808577893934341141844647361342, 0.5369817275366970150186113014894336642312, -0.6589586680640259237702006670849926714906, 0.002173919507041442867056417679258366319843, 0.160258221036243773059168368830402291732, 0.07692975380318590343193046490148646264167
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3440,7 +3495,7 @@ void getButcherTableau_SIRK5_4_6L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 6;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3463,8 +3518,9 @@ void getButcherTableau_SIRK5_4_6L4SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.9571870101884205599442175766372731256346, 0.3236308716095026285950456263249976079752, -0.8196403889619955579032555211590764239465, 0.6597465864153680493069140311307890784738, -0.3384137190879105331951984886483381052955, 0.2174896398366148532522767757131878900041
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3534,7 +3590,7 @@ void getButcherTableau_SIRK5_4_7L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3558,8 +3614,9 @@ void getButcherTableau_SIRK5_4_7L4SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.7264082857156683914647084840682314985972, -0.8497028850272479006391109931574646842292, 1.287247126874550662037732634570764248633, -0.9948221182327760161595402831343875618334, -0.02618177701237273210668265332584671675382, 0.9565675227867380328932819793645963526943, -0.09951615510456043749038916838497478123081
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3633,7 +3690,7 @@ void getButcherTableau_SIRK6_5_7L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 6;
-  tableau->order_bt = 5;
+  tableau->order_embd = 5;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3657,8 +3714,9 @@ void getButcherTableau_SIRK6_5_7L4SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.9915072149046932327366310931077749718825, -0.8175648709086375061724735804989188987865, 0.3596076532193498028680288410488735665471, 0.5886268619684020250250648081778748526865, -0.1500912256613756812904629298452719336487, -0.2, 0.227914366477568126833211768008468679185
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3733,7 +3791,7 @@ void getButcherTableau_SIRK6_5_8L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 8;
   tableau->order_b = 6;
-  tableau->order_bt = 5;
+  tableau->order_embd = 5;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3758,8 +3816,9 @@ void getButcherTableau_SIRK6_5_8L4SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       0.2890395308019656346660491119315910642148, 0.1995732391842089019497416890156561366589, -0.3284919489499406556216094388577725811699, 0.7906776944782210691129742470719911613377, -0.4548698553426108599536814388074863798869, 1.258225311406222613535737353785066871832, -2.523861776427936169442963886950218802976, 1.769707804849869465753752362811172548134
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3837,7 +3896,7 @@ void getButcherTableau_SIRK5_4_7L5SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 7;
   tableau->order_b = 5;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3861,8 +3920,9 @@ void getButcherTableau_SIRK5_4_7L5SA(BUTCHER_TABLEAU* tableau)
   const double bt[] = {
       -13.56122472236872793701951976770327776893, 7.85112736040522576490692428160825917758, 11.55713689832861419049952878162235994384, -13.71626961325604856568921319826094682262, 6.226067309660017722097407102829552411391, 4.983836118077694448040786394462527664561, -2.340673350846775622835913594558744498371
   };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -3935,7 +3995,7 @@ void getButcherTableau_SIRK3_2_3L2SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 3;
   tableau->order_b = 3;
-  tableau->order_bt = 2;
+  tableau->order_embd = 2;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -3954,8 +4014,9 @@ void getButcherTableau_SIRK3_2_3L2SA(BUTCHER_TABLEAU* tableau)
 
   // A-stable embedded with R(-oo) = 0.3260941051336266
   const double bt[] = { 0.4954977007432434677803446468352294326482, 0.7845393431657408183985171417826567462136, -0.2800370439089842861788617886178861788618 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -4041,7 +4102,7 @@ void getButcherTableau_FIRK7_6TS_5L4SA(BUTCHER_TABLEAU* tableau)
 {
   tableau->nStages = 5;
   tableau->order_b = 7;
-  tableau->order_bt = 4;
+  tableau->order_embd = 4;
   tableau->fac = 1.0;
 
   const double c[] = {
@@ -4062,8 +4123,9 @@ void getButcherTableau_FIRK7_6TS_5L4SA(BUTCHER_TABLEAU* tableau)
 
   // embedded of order 4, A-stable with R(-oo) = 0.232801093497972; even if low order, extremely good representation of true error!
   const double bt[] = { 0.18694844120073350613, 0.38918236484204499215, 0.17899093294069456928, 0.30434074640216690621, -0.05946248538563999458 };
+  double d[100]; for (int i = 0; i < tableau->nStages; i++) { d[i] = (b[i] - bt[i]); }
 
-  setButcherTableau(tableau, c, A, b, bt);
+  setButcherTableau(tableau, c, A, b, d);
   tableau->isKLeftAvailable = FALSE;
   tableau->isKRightAvailable = TRUE;
   tableau->withDenseOutput = TRUE;
@@ -4159,10 +4221,8 @@ void analyseButcherTableau(BUTCHER_TABLEAU* tableau, int nStates, unsigned int* 
 
   if (tableau->richardson) {
     tableau->fac = 1.0;
-    tableau->order_bt = tableau->order_b + 1;
+    tableau->order_embd = tableau->order_b + 1;
   }
-
-  tableau->error_order = errorEstimatorIsSet(&tableau->error.active) ? tableau->error.active.order : (int) fmin(tableau->order_b, tableau->order_bt);
 }
 
 /**
@@ -4424,7 +4484,7 @@ void freeButcherTableau(BUTCHER_TABLEAU* tableau)
   free(tableau->c);
   free(tableau->A);
   free(tableau->b);
-  free(tableau->bt);
+  free(tableau->d);
   free(tableau->b_dt);
 
   if (tableau->t_transform)
@@ -4483,7 +4543,7 @@ void printButcherTableau(BUTCHER_TABLEAU* tableau)
     if (!tableau->richardson){
       ct = snprintf(buffer, buffSize, "%10s | ", "");
       for (j = 0; j<tableau->nStages; j++) {
-        ct += snprintf(buffer+ct, buffSize-ct, "%10g", tableau->bt[j]);
+        ct += snprintf(buffer+ct, buffSize-ct, "%10g", tableau->d[j]);
       }
       infoStreamPrint(OMC_LOG_SOLVER, 0, "%s", buffer);
     }

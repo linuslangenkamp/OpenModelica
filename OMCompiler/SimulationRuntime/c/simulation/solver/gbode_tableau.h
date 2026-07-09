@@ -426,17 +426,18 @@ typedef struct STAGE_VALUE_PREDICTORS {
  *    ---------------------------------
  *        | b_1     b_2     ...   b_s
  *        | bt_1    bt_2    ...   bt_s
+ *
+ *      d = b_1 - bt_1      ...   b_s - bt_s
  */
 typedef struct BUTCHER_TABLEAU {
   double *A;                          /* Runge-Kutta matrix A */
   double *b;                          /* Weights vector */
-  double *bt;                         /* Weights vector of embedded formula */
+  double *d;                          /* Weights vector of embedded formula */
   double *b_dt;                       /* Weights vector for dense output */
   double *c;                          /* Nodes vector */
   int nStages;                        /* Number of stages */
   int order_b;                        /* Order of the Runge-Kutta method */
-  int order_bt;                       /* Order of the embedded Runge-Kutta method */
-  int error_order;                    /* Usually min(order_b, order_bt) */
+  int order_embd;                     /* Order of the embedded Runge-Kutta method */
   double fac;                         /* Security factor for step size control */
   modelica_boolean  richardson;       /* if no embedded version is available, Richardson
                                          extrapolation can be used for step size control */

@@ -183,7 +183,7 @@ int gbodef_allocateData(DATA *data, threadData_t *threadData, SOLVER_INFO *solve
     warningStreamPrint(OMC_LOG_STDOUT, 0, "Constant step size not supported for inner integration. Using IController.");
     gbfData->ctrl_method = GB_CTRL_I;
   }
-  gbfData->currentErrorOrder = gbfData->tableau->error_order;
+  gbfData->currentErrorOrder = gbfData->tableau->error.active.order;
 
   // allocate memory for the generic RK method
   gbfData->y              = malloc(gbData->nStates*sizeof(double));
@@ -388,7 +388,7 @@ int gbode_allocateData(DATA *data, threadData_t *threadData, SOLVER_INFO *solver
 
   // detect controller method
   gbData->ctrl_method = getControllerMethod(FLAG_SR_CTRL);
-  gbData->currentErrorOrder = gbData->tableau->error_order;
+  gbData->currentErrorOrder = gbData->tableau->error.active.order;
   use_fhr = (modelica_boolean) omc_flag[FLAG_SR_CTRL_FHR];
   use_filter = getGBCtrlFilterValue();
 
@@ -1065,9 +1065,6 @@ int gbodef_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo, d
         ii = gbData->fastStatesIdx[i];
         // calculate corresponding values for the error estimator and step size control
         gbfData->errtol[ii] = tol * gbData->nominals[ii] + fmax(fabs(gbfData->yOld[ii]), fabs(gbfData->y[ii])) * tol;
-        if (gbfData->tableau->richardson || gbfData->type == MS_TYPE_IMPLICIT) {
-          gbfData->errest[ii] = fabs(gbfData->yt[ii]);
-        }
         gbfData->err[ii] = gbfData->tableau->fac * gbfData->errest[ii] / gbfData->errtol[ii];
         err += gbfData->err[ii] * gbfData->err[ii];
       }
@@ -1600,9 +1597,6 @@ int gbode_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo)
       for (i = 0, err=0; i < nStates; i++) {
         // calculate corresponding values for the error estimator and step size control
         gbData->errtol[i] = tol * gbData->nominals[i] + fmax(fabs(gbData->yOld[i]), fabs(gbData->y[i])) * tol;
-        if (gbData->tableau->richardson || gbData->type == MS_TYPE_IMPLICIT) {
-          gbData->errest[i] = fabs(gbData->yt[i]);
-        }
         gbData->err[i] = gbData->tableau->fac * gbData->errest[i] / gbData->errtol[i];
         err += gbData->err[i] * gbData->err[i];
       }
