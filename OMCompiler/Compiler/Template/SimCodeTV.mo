@@ -472,6 +472,23 @@ package SimCode
     end JAC_MATRIX;
   end JacobianMatrix;
 
+  uniontype HessianMatrix
+    record HESSIAN_MATRIX
+      String name;
+      list<SimEqSystem> equations;
+      list<SimCodeVar.SimVar> lambdaVars;
+      list<SimCodeVar.SimVar> directionVars;
+      list<SimCodeVar.SimVar> resultVars;
+      list<SimCodeVar.SimVar> tmpVars;
+      SparsityPattern lowerSparsity;
+      list<SimGenericCall> generic_loop_calls;
+      Option<HashTableCrefSimVar.HashTable> lambdaHT;
+      Option<HashTableCrefSimVar.HashTable> directionHT;
+      Option<HashTableCrefSimVar.HashTable> resultHT;
+      Option<HashTableCrefSimVar.HashTable> tmpHT;
+    end HESSIAN_MATRIX;
+  end HessianMatrix;
+
   uniontype SimCode
     record SIMCODE
       ModelInfo modelInfo;
@@ -511,6 +528,7 @@ package SimCode
       DelayedExpression delayedExps;
       SpatialDistributionInfo spatialInfo;
       list<JacobianMatrix> jacobianMatrices;
+      list<HessianMatrix> hessianMatrices;
       Option<SimulationSettings> simulationSettingsOpt;
       String fileNamePrefix;
       String fullPathPrefix; // Used for FMI where code is not generated in the same directory
@@ -1239,6 +1257,13 @@ package SimCodeFunction
       String name;
       Option<HashTableCrefSimVar.HashTable> jacHT;
     end JACOBIAN_CONTEXT;
+    record HESSIAN_CONTEXT
+      String name;
+      Option<HashTableCrefSimVar.HashTable> lambdaHT;
+      Option<HashTableCrefSimVar.HashTable> directionHT;
+      Option<HashTableCrefSimVar.HashTable> resultHT;
+      Option<HashTableCrefSimVar.HashTable> tmpHT;
+    end HESSIAN_CONTEXT;
     record ALGLOOP_CONTEXT
       Boolean genInitialisation;
       Boolean genJacobian;
@@ -1547,6 +1572,15 @@ package SimCodeUtil
     input Option<HashTableCrefSimVar.HashTable> jacHT;
     output SimCodeFunction.Context outContext;
   end createJacContext;
+
+  function createHessianContext
+    input String name;
+    input Option<HashTableCrefSimVar.HashTable> lambdaHT;
+    input Option<HashTableCrefSimVar.HashTable> directionHT;
+    input Option<HashTableCrefSimVar.HashTable> resultHT;
+    input Option<HashTableCrefSimVar.HashTable> tmpHT;
+    output SimCodeFunction.Context outContext;
+  end createHessianContext;
 
   function localCref2SimVar
     input DAE.ComponentRef inCref;

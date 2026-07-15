@@ -432,7 +432,8 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.EXECUTE_COMMAND,
   Flags.MOO_DYNAMIC_OPTIMIZATION,
   Flags.FMI_EXTRA_ANNOTATIONS,
-  Flags.INTERACTIVE_DUMP_FORMAT
+  Flags.INTERACTIVE_DUMP_FORMAT,
+  Flags.MOO_GDOP
 };
 
 public function new

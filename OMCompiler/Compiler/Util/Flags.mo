@@ -1419,6 +1419,9 @@ constant ConfigFlag INTERACTIVE_DUMP_FORMAT = CONFIG_FLAG(165, "interactiveDumpF
   "Selects the format interactive API calls use to print result values.\n"+
   "default : The OpenModelica textual value format.\n"+
   "json    : JSON, for programmatic consumers such as the web clients.");
+constant ConfigFlag MOO_GDOP = CONFIG_FLAG(166, "gdop",
+  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
+  "Generate a general dynamic optimization problem (GDOP). Implied by --moo for now.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

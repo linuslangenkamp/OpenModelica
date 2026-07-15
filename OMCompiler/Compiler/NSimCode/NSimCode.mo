@@ -86,7 +86,9 @@ protected
   import Partition = NBPartition;
 
   // SimCode imports
+  import Optimization = NSimOptimization;
   import SimCodeUtil = NSimCodeUtil;
+  import NSimHessian.SimHessian;
   import NSimJacobian.SimJacobian;
   import SimGenericCall = NSimGenericCall;
   import SimPartition = NSimPartition;
@@ -217,6 +219,7 @@ public
       OldSimCodeFunction.MakefileParams makefileParams;
       //DelayedExpression delayedExps;
       list<SimJacobian> jacobians       "List of symbolic jacobians";
+      list<SimHessian> hessians         "List of symbolic HVP programs";
       Option<OldSimCode.SimulationSettings> simulationSettingsOpt; // replace this with new struct
       String fileNamePrefix;//, fullPathPrefix "Used in FMI where files are generated in a special directory";
       //String fmuTargetName;
@@ -328,6 +331,7 @@ public
           list<ComponentRef> discreteVars;
           ExtObjInfo extObjInfo;
           list<SimJacobian> jacobians;
+          list<SimHessian> hessians;
           UnorderedMap<ComponentRef, SimVar> simcode_map;
           UnorderedMap<ComponentRef, SimStrongComponent.Block> equation_map;
           Option<DaeModeData> daeModeData;
@@ -440,7 +444,7 @@ public
             (jacF, simCodeIndices) := SimJacobian.empty("F", simCodeIndices);
             (jacH, simCodeIndices) := SimJacobian.empty("H", simCodeIndices);
 
-            (jacLfg, jacMrf, jacR0, simCodeIndices) := SimJacobian.createOptimizationJacobian(listAppend(bdae.ode, bdae.ode_event), simCodeIndices, simcode_map);
+            (jacLfg, jacMrf, jacR0, hessians, simCodeIndices) := Optimization.createJacobians(bdae.optimizationData, simCodeIndices, simcode_map);
 
             //jacobians := jacA :: jacB :: jacC :: jacD :: jacF :: jacH :: jacAdjoint :: jacobians;
             jacobians := listReverse(jacR0 :: jacMrf :: jacLfg :: jacAdjoint :: jacH :: jacF :: jacD :: jacC :: jacB :: jacA :: jacobians);
@@ -492,6 +496,7 @@ public
               extObjInfo                = extObjInfo,
               makefileParams            = makefileParams,
               jacobians                 = jacobians,
+              hessians                  = hessians,
               simulationSettingsOpt     = simSettingsOpt,
               fileNamePrefix            = fileNamePrefix,
               simcode_map               = simcode_map,
@@ -573,6 +578,7 @@ public
         delayedExps                   = OldSimCode.DELAYED_EXPRESSIONS({}, 0), // ToDo: add this once delayed expressions are supported
         spatialInfo                   = OldSimCode.SPATIAL_DISTRIBUTION_INFO({}, 0),
         jacobianMatrices              = list(SimJacobian.convert(jac) for jac in simCode.jacobians),
+        hessianMatrices               = list(SimHessian.convert(hess) for hess in simCode.hessians),
         simulationSettingsOpt         = simCode.simulationSettingsOpt, // replace with new struct later on
         fileNamePrefix                = simCode.fileNamePrefix,
         fullPathPrefix                = "", // FMI stuff

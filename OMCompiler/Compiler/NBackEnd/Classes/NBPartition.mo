@@ -106,15 +106,22 @@ public
     algorithm
       str := match association
         case CONTINUOUS() algorithm
+          str := "";
           if isSome(association.jacobian) then
             str := BJacobian.toString(Util.getOption(association.jacobian), Partition.kindToString(association.kind));
-            if (Flags.getConfigBool(Flags.MOO_DYNAMIC_OPTIMIZATION)) then
-              str := "\n" + str + BJacobian.toString(Util.getOption(association.LFG_jacobian), Partition.kindToString(association.kind));
-              str := "\n" + str + BJacobian.toString(Util.getOption(association.MRF_jacobian), Partition.kindToString(association.kind));
-              str := "\n" + str + BJacobian.toString(Util.getOption(association.R0_jacobian), Partition.kindToString(association.kind));
-            end if;
           else
             str := StringUtil.headline_1("No Jacobian");
+          end if;
+          if Flags.getConfigBool(Flags.MOO_DYNAMIC_OPTIMIZATION) or Flags.getConfigBool(Flags.MOO_GDOP) then
+            if isSome(association.LFG_jacobian) then
+              str := str + "\n" + BJacobian.toString(Util.getOption(association.LFG_jacobian), Partition.kindToString(association.kind));
+            end if;
+            if isSome(association.MRF_jacobian) then
+              str := str + "\n" + BJacobian.toString(Util.getOption(association.MRF_jacobian), Partition.kindToString(association.kind));
+            end if;
+            if isSome(association.R0_jacobian) then
+              str := str + "\n" + BJacobian.toString(Util.getOption(association.R0_jacobian), Partition.kindToString(association.kind));
+            end if;
           end if;
           if isSome(association.jacobianAdjoint) then
             str := BJacobian.toString(Util.getOption(association.jacobianAdjoint), Partition.kindToString(association.kind) + " Adjoint") + "\n";

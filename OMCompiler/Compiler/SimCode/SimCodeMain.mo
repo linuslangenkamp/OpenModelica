@@ -637,6 +637,11 @@ algorithm
             generatedObjects := AvlSetString.add(generatedObjects, simCode.fileNamePrefix + str + ".o\n");
           end if;
         end for;
+        if not listEmpty(simCode.hessianMatrices) then
+          codegenFuncs := (function runTplWriteFile(func=function CodegenC.simulationFile_moo(in_a_simCode=simCode), file=simCode.fileNamePrefix + "_19moo.c")) :: codegenFuncs;
+          codegenFuncs := (function runTplWriteFile(func=function CodegenC.simulationFile_moo_header(in_a_simCode=simCode), file=simCode.fileNamePrefix + "_19moo.h")) :: codegenFuncs;
+          generatedObjects := AvlSetString.add(generatedObjects, simCode.fileNamePrefix + "_19moo.o\n");
+        end if;
         for str in {"_11mix.o\n","_functions.o\n","_info.json\n","_init.xml\n"} loop
           generatedObjects := AvlSetString.add(generatedObjects, simCode.fileNamePrefix + str);
         end for;
@@ -2009,6 +2014,7 @@ algorithm
       delayedExps                 = SimCode.DELAYED_EXPRESSIONS(delayedExps, maxDelayedExpIndex),
       spatialInfo                 = spatialInfo,
       jacobianMatrices            = SymbolicJacs,
+      hessianMatrices             = {},
       simulationSettingsOpt       = simSettingsOpt,
       fileNamePrefix              = filenamePrefix,
       fullPathPrefix              = "",

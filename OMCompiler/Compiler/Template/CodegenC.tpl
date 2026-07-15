@@ -1044,6 +1044,145 @@ template simulationFile_opt_header(SimCode simCode)
   end match
 end simulationFile_opt_header;
 
+template functionHessians(list<HessianMatrix> hessianMatrices, String modelNamePrefix)
+::=
+  (hessianMatrices |> HESSIAN_MATRIX(name=name, equations=equations, generic_loop_calls=generic_loop_calls,
+                                     lambdaHT=lambdaHT, directionHT=directionHT, resultHT=resultHT, tmpHT=tmpHT) =>
+    <<
+    <%genericCallHeaders(generic_loop_calls, createHessianContext(name, lambdaHT, directionHT, resultHT, tmpHT))%>
+
+    <%(equations |> eq hasindex sub_idx =>
+      equation_impl2(-1, sub_idx, eq, createHessianContext(name, lambdaHT, directionHT, resultHT, tmpHT), modelNamePrefix, true, false, true); separator="\n")%>
+
+    static int <%symbolName(modelNamePrefix,"functionHess")%><%name%>(DATA* data, threadData_t *threadData, HESSIAN *hessian)
+    {
+      <%equations_call(equations, modelNamePrefix, createHessianContext(name, lambdaHT, directionHT, resultHT, tmpHT), '')%>
+      return 0;
+    }
+
+    <%genericCallBodies(generic_loop_calls, createHessianContext(name, lambdaHT, directionHT, resultHT, tmpHT))%>
+    >>
+  ;separator="\n\n")
+end functionHessians;
+
+template hessianSparsityFunction(HessianMatrix hessian, String modelNamePrefix)
+::=
+  match hessian
+    case HESSIAN_MATRIX(lambdaVars=lambdaVars, directionVars=directionVars, resultVars=resultVars, tmpVars=tmpVars,
+                        lowerSparsity=lowerSparsity, name=name) then
+      let colPtrIndex = genSPCRSPtr(listLength(directionVars), lowerSparsity, "colPtrIndex")
+      let rowIndex = if intGt(lengthListElements(unzipSecond(lowerSparsity)), 0) then genSPCRSRows(lengthListElements(unzipSecond(lowerSparsity)), lowerSparsity, "rowIndex")
+      <<
+      static LOWER_TRIANGULAR_SPARSITY* <%symbolName(modelNamePrefix,"hessian")%><%name%>LowerTriangularSparsity(DATA* data, threadData_t *threadData)
+      {
+        int i = 0;
+        <%colPtrIndex%>
+        <%rowIndex%>
+        LOWER_TRIANGULAR_SPARSITY *sparsity = allocLowerTriangularSparsity(<%listLength(directionVars)%>, <%lengthListElements(unzipSecond(lowerSparsity))%>);
+        if (sparsity == NULL) {
+          return NULL;
+        }
+
+        for (i = 0; i < <%intAdd(listLength(directionVars), 1)%>; i++) {
+          sparsity->leadindex[i] = (unsigned int)colPtrIndex[i];
+        }
+        for (i = 2; i < <%intAdd(listLength(directionVars), 1)%>; i++) {
+          sparsity->leadindex[i] += sparsity->leadindex[i - 1];
+        }
+
+        <%if intGt(lengthListElements(unzipSecond(lowerSparsity)), 0) then <<
+        for (i = 0; i < <%lengthListElements(unzipSecond(lowerSparsity))%>; i++) {
+          sparsity->index[i] = (unsigned int)rowIndex[i];
+        }
+        >>%>
+
+        colorLowerTriangularSparsity(sparsity);
+        return sparsity;
+      }
+      >>
+  end match
+end hessianSparsityFunction;
+
+template hessianInfoEntry(HessianMatrix hessian, String modelNamePrefix)
+::=
+  match hessian
+    case HESSIAN_MATRIX(lambdaVars=lambdaVars, directionVars=directionVars, resultVars=resultVars, tmpVars=tmpVars,
+                        name=name) then
+      <<
+      {
+        "<%name%>",
+        <%listLength(lambdaVars)%>,
+        <%listLength(directionVars)%>,
+        <%listLength(tmpVars)%>,
+        <%symbolName(modelNamePrefix,"hessian")%><%name%>LowerTriangularSparsity,
+        <%symbolName(modelNamePrefix,"functionHess")%><%name%>
+      }
+      >>
+  end match
+end hessianInfoEntry;
+
+template hessianInfoTable(list<HessianMatrix> hessianMatrices, String modelNamePrefix)
+::=
+  let staticInfos = if intGt(listLength(hessianMatrices), 0) then
+    <<
+    <%(hessianMatrices |> hessian => hessianSparsityFunction(hessian, modelNamePrefix); separator="\n")%>
+
+    static const HESSIAN_INFO <%symbolName(modelNamePrefix,"hessianInfos")%>[<%listLength(hessianMatrices)%>] = {
+      <%hessianMatrices |> hessian => hessianInfoEntry(hessian, modelNamePrefix); separator=",\n"%>
+    };
+    >>
+  <<
+  <%staticInfos%>
+
+  const unsigned int <%symbolName(modelNamePrefix,"num_hessians")%> = <%listLength(hessianMatrices)%>;
+  const HESSIAN_INFO *<%symbolName(modelNamePrefix,"hessians")%> = <%if intGt(listLength(hessianMatrices), 0) then symbolName(modelNamePrefix,"hessianInfos") else "NULL"%>;
+  >>
+end hessianInfoTable;
+
+template simulationFile_moo(SimCode simCode)
+"New-backend generated Hessian-vector product callbacks"
+::=
+  match simCode
+    case simCode as SIMCODE(hessianMatrices = hessianMatrices) then
+    let modelNamePrefixStr = modelNamePrefix(simCode)
+    <<
+    /* Hessian-vector products */
+    <%simulationFileHeader(simCode.fileNamePrefix)%>
+    #include "<%fileNamePrefix%>_19moo.h"
+
+    #if defined(__cplusplus)
+    extern "C" {
+    #endif
+
+    <%functionHessians(hessianMatrices, modelNamePrefixStr)%>
+    <%hessianInfoTable(hessianMatrices, modelNamePrefixStr)%>
+
+    #if defined(__cplusplus)
+    }
+    #endif<%\n%>
+    >>
+end simulationFile_moo;
+
+template simulationFile_moo_header(SimCode simCode)
+"New-backend generated Hessian-vector product declarations"
+::=
+  match simCode
+    case simCode as SIMCODE(__) then
+    let modelNamePrefixStr = modelNamePrefix(simCode)
+    <<
+    #include "simulation/hessian_util.h"
+
+    #if defined(__cplusplus)
+      extern "C" {
+    #endif
+      extern const unsigned int <%symbolName(modelNamePrefixStr,"num_hessians")%>;
+      extern const HESSIAN_INFO *<%symbolName(modelNamePrefixStr,"hessians")%>;
+    #if defined(__cplusplus)
+    }
+    #endif<%\n%>
+    >>
+end simulationFile_moo_header;
+
 template simulationFile_lnz(SimCode simCode)
 "Linearization"
 ::=
@@ -6133,6 +6272,23 @@ template equation_impl2(Integer base_idx, Integer sub_idx, SimEqSystem eq, Conte
           <%equation_withProfile(ix, x)%>
         }
         >>
+        case HESSIAN_CONTEXT()
+        then
+        <<
+
+        <%tempeqns%>
+        /*
+        <%dumpEqs(fill(eq,1))%>
+        */
+        <%OMC_NO_OPT%><% if static then "static "%>void <%symbolName(modelNamePrefix,"eqFunction")%>_<%ix%>(DATA *data, threadData_t *threadData, HESSIAN *hessian)
+        {
+          <%baseClockIndex_%>
+          <%subClockIndex_%>
+          const int equationIndexes[2] = {1,<%ix%>};
+          <%&varD%>
+          <%equation_withProfile(ix, x)%>
+        }
+        >>
         else
         <<
 
@@ -6161,6 +6317,7 @@ template equation_call(SimEqSystem eq, String modelNamePrefix, Context context)
   else
     let args = match context
       case JACOBIAN_CONTEXT() then 'data, threadData, jacobian, parentJacobian'
+      case HESSIAN_CONTEXT() then 'data, threadData, hessian'
       else 'data, threadData'
     <<
     <%symbolName(modelNamePrefix,"eqFunction")%>_<%equationIndexGeneral(eq)%>(<%args%>);
@@ -6177,9 +6334,11 @@ template equations_call(list<SimEqSystem> eqs, String modelNamePrefix, Context c
     let nFuncs = listLength(eqs)
     let args = match context
       case JACOBIAN_CONTEXT() then 'data, threadData, jacobian, parentJacobian'
+      case HESSIAN_CONTEXT() then 'data, threadData, hessian'
       else 'data, threadData'
     let argsType = match context
       case JACOBIAN_CONTEXT() then 'DATA*, threadData_t*, JACOBIAN*, JACOBIAN*'
+      case HESSIAN_CONTEXT() then 'DATA*, threadData_t*, HESSIAN*'
       else 'DATA*, threadData_t*'
     let body = match selection
       case "" then
@@ -6301,6 +6460,7 @@ template equationSimpleAssignLhs(ComponentRef cref, Context context,
   match context
   case FUNCTION_CONTEXT(__)
   case JACOBIAN_CONTEXT(__)
+  case HESSIAN_CONTEXT(__)
   case OMSI_CONTEXT(__) then
     contextCref(cref, context, &preExp, &varDecls, &auxFunction, &sub)
   else
@@ -6402,8 +6562,14 @@ template equationGenericAssign(SimEqSystem eq, Context context,
                                  Text &varDecls, Text &auxFunction, String modelNamePrefix)
  "Generate a call for a generic for-loop structure with an index-list."
 ::=
-  let jac = match context case JACOBIAN_CONTEXT() then ", jacobian" else ""
-  let sub_name = match context case JACOBIAN_CONTEXT() then "jac_" else ""
+  let jac = match context
+    case JACOBIAN_CONTEXT() then ", jacobian"
+    case HESSIAN_CONTEXT() then ", hessian"
+    else ""
+  let sub_name = match context
+    case JACOBIAN_CONTEXT() then "jac_"
+    case HESSIAN_CONTEXT() then "hess_"
+    else ""
 <<
 <%modelicaLine(eqInfo(eq))%>
 <%match eq
@@ -6483,8 +6649,14 @@ template entwinedSingleCall(SimEqSystem eq, Integer i0, Context context,
 <<
 <%match eq
 case eqn as SES_GENERIC_ASSIGN() then
-  let jac = match context case JACOBIAN_CONTEXT() then ", jacobian" else ""
-  let sub_name = match context case JACOBIAN_CONTEXT() then "jac_" else ""
+  let jac = match context
+    case JACOBIAN_CONTEXT() then ", jacobian"
+    case HESSIAN_CONTEXT() then ", hessian"
+    else ""
+  let sub_name = match context
+    case JACOBIAN_CONTEXT() then "jac_"
+    case HESSIAN_CONTEXT() then "hess_"
+    else ""
   <<
     case <%call_index%>:
       genericCall_<%sub_name%><%call_index%>(data, threadData<%jac%>, equationIndexes, idx_lst_<%call_index%>[call_indices[<%i0%>]]);
@@ -7008,12 +7180,13 @@ template simulationMakefile(String target, SimCode simCode, list<String> extraFi
 match getGeneralTarget(target)
 case "msvc" then
 match simCode
-case SIMCODE(modelInfo=MODELINFO(__), makefileParams=MAKEFILE_PARAMS(__), simulationSettingsOpt = sopt) then
+case SIMCODE(modelInfo=MODELINFO(__), makefileParams=MAKEFILE_PARAMS(__), simulationSettingsOpt = sopt, hessianMatrices = hessianMatrices) then
   let dirExtra = if modelInfo.directory then '/LIBPATH:"<%modelInfo.directory%>"' //else ""
   let libsStr = (makefileParams.libs |> lib => lib ;separator=" ")
   let libsPos1 = if not dirExtra then libsStr //else ""
   let libsPos2 = if dirExtra then libsStr // else ""
   let ParModelicaExpLibs = if acceptParModelicaGrammar() then 'ParModelicaExpl.lib OpenCL.lib' // else ""
+  let mooFiles = if intGt(listLength(hessianMatrices), 0) then ' <%fileNamePrefix%>_19moo.c' else ''
   let extraCflags = match sopt case SOME(s as SIMULATION_SETTINGS(__)) then
     match s.method case "dassljac" then "-D_OMC_JACOBIAN "
   <<
@@ -7051,7 +7224,7 @@ case SIMCODE(modelInfo=MODELINFO(__), makefileParams=MAKEFILE_PARAMS(__), simula
   CFILES=<%fileNamePrefix%>_functions.c <%fileNamePrefix%>_records.c \
   <%fileNamePrefix%>_01exo.c <%fileNamePrefix%>_02nls.c <%fileNamePrefix%>_03lsy.c <%fileNamePrefix%>_04set.c <%fileNamePrefix%>_05evt.c <%fileNamePrefix%>_06inz.c <%fileNamePrefix%>_07dly.c \
   <%fileNamePrefix%>_08bnd.c <%fileNamePrefix%>_09alg.c <%fileNamePrefix%>_10asr.c <%fileNamePrefix%>_11mix.c <%fileNamePrefix%>_12jac.c <%fileNamePrefix%>_13opt.c <%fileNamePrefix%>_14lnz.c \
-  <%fileNamePrefix%>_15syn.c <%fileNamePrefix%>_16dae.c <%fileNamePrefix%>_17inl.c <%fileNamePrefix%>_18spd.c <%extraFiles |> extraFile => ' <%extraFile%>'%>
+  <%fileNamePrefix%>_15syn.c <%fileNamePrefix%>_16dae.c <%fileNamePrefix%>_17inl.c <%fileNamePrefix%>_18spd.c<%mooFiles%><%extraFiles |> extraFile => ' <%extraFile%>'%>
 
   OFILES=$(CFILES:.c=.obj)
   GENERATEDFILES=$(MAINFILE) $(FILEPREFIX)_functions.h $(FILEPREFIX).makefile $(CFILES)
@@ -7070,7 +7243,7 @@ case SIMCODE(modelInfo=MODELINFO(__), makefileParams=MAKEFILE_PARAMS(__), simula
 end match
 case "gcc" then
 match simCode
-case SIMCODE(modelInfo=MODELINFO(varInfo=varInfo as VARINFO(__)), delayedExps=DELAYED_EXPRESSIONS(maxDelayedIndex=maxDelayedIndex), makefileParams=MAKEFILE_PARAMS(__), simulationSettingsOpt = sopt) then
+case SIMCODE(modelInfo=MODELINFO(varInfo=varInfo as VARINFO(__)), delayedExps=DELAYED_EXPRESSIONS(maxDelayedIndex=maxDelayedIndex), makefileParams=MAKEFILE_PARAMS(__), simulationSettingsOpt = sopt, hessianMatrices = hessianMatrices) then
   let dirExtra = if modelInfo.directory then '-L"<%modelInfo.directory%>"' //else ""
   let libsStr = (makefileParams.libs |> lib => lib ;separator=" ")
   let libsPos1 = if not dirExtra then libsStr //else ""
@@ -7079,6 +7252,7 @@ case SIMCODE(modelInfo=MODELINFO(varInfo=varInfo as VARINFO(__)), delayedExps=DE
   let ExtraStack = if boolOr(stringEq(makefileParams.platform, "win32"),stringEq(makefileParams.platform, "win64")) then '--stack,16777216,'
   let ExtraUnicodeFlag = if boolOr(stringEq(makefileParams.platform, "win32"),stringEq(makefileParams.platform, "win64")) then '-municode'
   let linkBinDirWindows = if boolOr(stringEq(makefileParams.platform, "win32"),stringEq(makefileParams.platform, "win64")) then '-L"<%makefileParams.omhome%>/bin"'
+  let mooFiles = if intGt(listLength(hessianMatrices), 0) then ' <%fileNamePrefix%>_19moo.c' else ''
   let extraCflags = match sopt case SOME(s as SIMULATION_SETTINGS(__)) then
     match s.method case "dassljac" then "-D_OMC_JACOBIAN "
 
@@ -7112,7 +7286,7 @@ case SIMCODE(modelInfo=MODELINFO(varInfo=varInfo as VARINFO(__)), delayedExps=DE
   CFILES=<%fileNamePrefix%>_functions.c <%fileNamePrefix%>_records.c \
   <%fileNamePrefix%>_01exo.c <%fileNamePrefix%>_02nls.c <%fileNamePrefix%>_03lsy.c <%fileNamePrefix%>_04set.c <%fileNamePrefix%>_05evt.c <%fileNamePrefix%>_06inz.c <%fileNamePrefix%>_07dly.c \
   <%fileNamePrefix%>_08bnd.c <%fileNamePrefix%>_09alg.c <%fileNamePrefix%>_10asr.c <%fileNamePrefix%>_11mix.c <%fileNamePrefix%>_12jac.c <%fileNamePrefix%>_13opt.c <%fileNamePrefix%>_14lnz.c \
-  <%fileNamePrefix%>_15syn.c <%fileNamePrefix%>_16dae.c <%fileNamePrefix%>_17inl.c <%fileNamePrefix%>_18spd.c <%extraFiles |> extraFile => ' \<%\n%>  <%extraFile%>'%>
+  <%fileNamePrefix%>_15syn.c <%fileNamePrefix%>_16dae.c <%fileNamePrefix%>_17inl.c <%fileNamePrefix%>_18spd.c<%mooFiles%><%extraFiles |> extraFile => ' \<%\n%>  <%extraFile%>'%>
 
   OFILES=$(CFILES:.c=.o)
   GENERATEDFILES=$(MAINFILE) <%fileNamePrefix%>.makefile <%fileNamePrefix%>_literals.h <%fileNamePrefix%>_functions.h $(CFILES)
@@ -7487,8 +7661,14 @@ end equationNames_Partial;
 template genericCallBodies(list<SimGenericCall> genericCalls, Context context)
  "Generates the body for a set of generic calls."
 ::=
-  let jac = match context case JACOBIAN_CONTEXT() then ", JACOBIAN *jacobian" else ""
-  let sub_name = match context case JACOBIAN_CONTEXT() then "jac_" else ""
+  let jac = match context
+    case JACOBIAN_CONTEXT() then ", JACOBIAN *jacobian"
+    case HESSIAN_CONTEXT() then ", HESSIAN *hessian"
+    else ""
+  let sub_name = match context
+    case JACOBIAN_CONTEXT() then "jac_"
+    case HESSIAN_CONTEXT() then "hess_"
+    else ""
   (genericCalls |> call =>
     let comment = escapeCComments(simGenericCallString(call))
     let &sub = buffer ""
@@ -7712,8 +7892,14 @@ end subIterator;
 template genericCallHeaders(list<SimGenericCall> genericCalls, Context context)
  "Generates the header for a set of generic calls."
 ::=
-  let jac = match context case JACOBIAN_CONTEXT() then ", JACOBIAN *jacobian" else ""
-  let sub_name = match context case JACOBIAN_CONTEXT() then "jac_" else ""
+  let jac = match context
+    case JACOBIAN_CONTEXT() then ", JACOBIAN *jacobian"
+    case HESSIAN_CONTEXT() then ", HESSIAN *hessian"
+    else ""
+  let sub_name = match context
+    case JACOBIAN_CONTEXT() then "jac_"
+    case HESSIAN_CONTEXT() then "hess_"
+    else ""
   (genericCalls |> call => match call
     case SINGLE_GENERIC_CALL()
     case IF_GENERIC_CALL()

@@ -4724,6 +4724,8 @@ template contextCref(ComponentRef cr, Context context, Text &preExp, Text &varDe
           case "omsic" then crefOMSI(cr, context)
            /*deactivated case "omsicpp" then crefOMSI(cr, context)*/
           else jacCrefs(cr, context, 0, &sub))
+  case HESSIAN_CONTEXT(resultHT=SOME(_), tmpHT=SOME(_), lambdaHT=SOME(_), directionHT=SOME(_))
+    then hessianCrefs(cr, context, 0, &sub)
 
   case OMSI_CONTEXT(__) then crefOMSI(cr, context)
   else cref(cr, &sub)
@@ -4835,6 +4837,9 @@ template contextCrefOld(ComponentRef cr, Context context, Text &auxFunction, Int
   case JACOBIAN_CONTEXT(jacHT=SOME(_)) then
     let &sub = buffer ""
     jacCrefs(cr, context, ix, &sub)
+  case HESSIAN_CONTEXT(resultHT=SOME(_), tmpHT=SOME(_), lambdaHT=SOME(_), directionHT=SOME(_)) then
+    let &sub = buffer ""
+    hessianCrefs(cr, context, ix, &sub)
   else crefOld(cr, ix)
 end contextCrefOld;
 
@@ -4855,6 +4860,60 @@ template jacCrefs(ComponentRef cr, Context context, Integer ix, Text &sub)
        else '(&(jacobian->seedVars[<%index%>]))<%&sub%><%crefCCommentWithVariability(v)%>'
      case SIMVAR(index=-2) then crefOld(cr, ix)
 end jacCrefs;
+
+template hessianCrefs(ComponentRef cr, Context context, Integer ix, Text &sub)
+  "Generates code for Hessian-vector product variables."
+::=
+ match context
+   case HESSIAN_CONTEXT(resultHT=SOME(resultHT), tmpHT=SOME(tmpHT), lambdaHT=SOME(lambdaHT), directionHT=SOME(directionHT)) then
+     hessianResultCref(cr, ix, &sub, resultHT, tmpHT, lambdaHT, directionHT)
+end hessianCrefs;
+
+template hessianResultCref(ComponentRef cr, Integer ix, Text &sub,
+                           HashTableCrefSimVar.HashTable resultHT,
+                           HashTableCrefSimVar.HashTable tmpHT,
+                           HashTableCrefSimVar.HashTable lambdaHT,
+                           HashTableCrefSimVar.HashTable directionHT)
+::=
+  match simVarFromHT(cr, resultHT)
+    case SIMVAR(index=-2) then hessianTmpCref(cr, ix, &sub, tmpHT, lambdaHT, directionHT)
+    case v as SIMVAR(__) then hessianArrayCref("resultVars", v, &sub)
+end hessianResultCref;
+
+template hessianTmpCref(ComponentRef cr, Integer ix, Text &sub,
+                        HashTableCrefSimVar.HashTable tmpHT,
+                        HashTableCrefSimVar.HashTable lambdaHT,
+                        HashTableCrefSimVar.HashTable directionHT)
+::=
+  match simVarFromHT(cr, tmpHT)
+    case SIMVAR(index=-2) then hessianLambdaCref(cr, ix, &sub, lambdaHT, directionHT)
+    case v as SIMVAR(__) then hessianArrayCref("tmpVars", v, &sub)
+end hessianTmpCref;
+
+template hessianLambdaCref(ComponentRef cr, Integer ix, Text &sub,
+                           HashTableCrefSimVar.HashTable lambdaHT,
+                           HashTableCrefSimVar.HashTable directionHT)
+::=
+  match simVarFromHT(cr, lambdaHT)
+    case SIMVAR(index=-2) then hessianDirectionCref(cr, ix, &sub, directionHT)
+    case v as SIMVAR(__) then hessianArrayCref("lambdaVars", v, &sub)
+end hessianLambdaCref;
+
+template hessianDirectionCref(ComponentRef cr, Integer ix, Text &sub,
+                              HashTableCrefSimVar.HashTable directionHT)
+::=
+  match simVarFromHT(cr, directionHT)
+    case SIMVAR(index=-2) then crefOld(cr, ix)
+    case v as SIMVAR(__) then hessianArrayCref("directionVars", v, &sub)
+end hessianDirectionCref;
+
+template hessianArrayCref(String arrayName, SimVar v, Text &sub)
+::=
+  match v
+    case SIMVAR(index=index) then
+      if stringEq(sub, "") then 'hessian-><%arrayName%>[<%index%>]<%crefCCommentWithVariability(v)%>'
+      else '(&(hessian-><%arrayName%>[<%index%>]))<%&sub%><%crefCCommentWithVariability(v)%>'
+end hessianArrayCref;
 
 template contextCrefIsPre(ComponentRef cr, Context context, Text &auxFunction, Boolean isPre)
   "Generates code for a component reference depending on which context we're in."

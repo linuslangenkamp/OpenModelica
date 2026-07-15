@@ -109,6 +109,23 @@ end JacobianMatrix;
 constant JacobianMatrix emptyJacobian = JAC_MATRIX({}, {}, "", {}, {}, {}, {}, {}, {}, 0, -1, 0, {}, NONE(), false, false, -1, "");
 constant PartitionData emptyPartitionData = PARTITIONDATA(-1,{},{},{});
 
+uniontype HessianMatrix
+  record HESSIAN_MATRIX
+    String name                                      "unique HVP name";
+    list<SimEqSystem> equations                     "HVP equations";
+    list<SimCodeVar.SimVar> lambdaVars              "reverse seed vector lambda";
+    list<SimCodeVar.SimVar> directionVars           "forward direction vector v";
+    list<SimCodeVar.SimVar> resultVars              "HVP result vector h";
+    list<SimCodeVar.SimVar> tmpVars                 "temporary HVP variables";
+    SparsityPattern lowerSparsity                   "lower triangular Hessian sparsity in CSC form";
+    list<SimGenericCall> generic_loop_calls;
+    Option<HashTableCrefSimVar.HashTable> lambdaHT;
+    Option<HashTableCrefSimVar.HashTable> directionHT;
+    Option<HashTableCrefSimVar.HashTable> resultHT;
+    Option<HashTableCrefSimVar.HashTable> tmpHT;
+  end HESSIAN_MATRIX;
+end HessianMatrix;
+
 
 uniontype SimCode
   "Root data structure containing information required for templates to
@@ -149,6 +166,7 @@ uniontype SimCode
     DelayedExpression delayedExps;
     SpatialDistributionInfo spatialInfo;
     list<JacobianMatrix> jacobianMatrices;
+    list<HessianMatrix> hessianMatrices;
     Option<SimulationSettings> simulationSettingsOpt;
     String fileNamePrefix "Prefix for all enerated C files. Usually the model name with dots replaced by underscores.";
     String fullPathPrefix "Used in FMI where files are generated in a special directory";

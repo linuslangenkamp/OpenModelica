@@ -338,6 +338,14 @@ public uniontype Context
     Option<HashTableCrefSimVar.HashTable> jacHT;
   end JACOBIAN_CONTEXT;
 
+  record HESSIAN_CONTEXT
+    String name;
+    Option<HashTableCrefSimVar.HashTable> lambdaHT;
+    Option<HashTableCrefSimVar.HashTable> directionHT;
+    Option<HashTableCrefSimVar.HashTable> resultHT;
+    Option<HashTableCrefSimVar.HashTable> tmpHT;
+  end HESSIAN_CONTEXT;
+
   record OTHER_CONTEXT
   end OTHER_CONTEXT;
 

@@ -800,6 +800,7 @@ algorithm
       delayedExps                 = SimCode.DELAYED_EXPRESSIONS(delayedExps, maxDelayedExpIndex),
       spatialInfo                 = spatialInfo,
       jacobianMatrices            = SymbolicJacs,
+      hessianMatrices             = {},
       simulationSettingsOpt       = simSettingsOpt,
       fileNamePrefix              = filenamePrefix,
       fullPathPrefix              = fullPathPrefix,
@@ -15254,6 +15255,17 @@ public function createJacContext
 algorithm
   outContext := SimCodeFunction.JACOBIAN_CONTEXT(name, jacHT);
 end createJacContext;
+
+public function createHessianContext
+  input String name;
+  input Option<HashTableCrefSimVar.HashTable> lambdaHT;
+  input Option<HashTableCrefSimVar.HashTable> directionHT;
+  input Option<HashTableCrefSimVar.HashTable> resultHT;
+  input Option<HashTableCrefSimVar.HashTable> tmpHT;
+  output SimCodeFunction.Context outContext;
+algorithm
+  outContext := SimCodeFunction.HESSIAN_CONTEXT(name, lambdaHT, directionHT, resultHT, tmpHT);
+end createHessianContext;
 
 
 public function localCref2SimVar

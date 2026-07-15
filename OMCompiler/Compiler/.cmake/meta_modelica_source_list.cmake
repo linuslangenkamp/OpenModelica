@@ -311,6 +311,8 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/2_Pre/NBFunctionAlias.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/2_Pre/NBInline.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBJacobian.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBHessian.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBOptimization.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBSolve.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBTearing.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Modules/3_Post/NBEvaluation.mo
@@ -319,6 +321,8 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBASSC.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBBackendUtil.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBDifferentiate.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBForward.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBAdjoint.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBReplacements.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBResizable.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBSlice.mo
@@ -409,6 +413,8 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimCodeUtil.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimGenericCall.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimJacobian.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimHessian.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimOptimization.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimPartition.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimStrongComponent.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NSimCode/NSimVar.mo

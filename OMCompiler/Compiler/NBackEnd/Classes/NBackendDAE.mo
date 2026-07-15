@@ -92,6 +92,7 @@ protected
   import FunctionAlias = NBFunctionAlias;
   import Initialization = NBInitialization;
   import Inline = NBInline;
+  import Optimization = NBOptimization;
   import NBJacobian.JacobianType;
   import Module = NBModule;
   import Resizable = NBResizable;
@@ -107,6 +108,31 @@ protected
   import System;
 
 public
+  type OptimizationProblem = enumeration(GDOP);
+  type OptimizationFormulation = enumeration(ODE, DAE);
+
+  record OPTIMIZATION_PARTITION_DATA
+    String name                         "Context name used for generated derivative artifacts";
+    OptimizationFormulation formulation "ODE or DAE residual formulation";
+    VariablePointers differentiationVars "Public columns: states and optimizable inputs/parameters";
+    VariablePointers innerVars          "Dependent inner variables needed to preserve dependencies";
+    VariablePointers lfgFunctionVars    "Lagrange, dynamics and path-constraint rows";
+    VariablePointers mrfFunctionVars    "Mayer and final-constraint rows";
+    VariablePointers r0FunctionVars     "Initial-constraint rows";
+    Option<BackendDAE> lfgJacobian      "Jacobian of LFG rows";
+    Option<BackendDAE> mrfJacobian      "Jacobian of MRF rows";
+    Option<BackendDAE> r0Jacobian       "Jacobian of R0 rows";
+    Option<BackendDAE> lfgHessian       "ODE HVP program for lambda^T * LFG";
+    Option<BackendDAE> mrfHessian       "ODE HVP program for lambda^T * MRF";
+    Option<BackendDAE> r0Hessian        "ODE HVP program for lambda^T * R0";
+  end OPTIMIZATION_PARTITION_DATA;
+
+  record OPTIMIZATION_DATA
+    OptimizationProblem problem;
+    OptimizationFormulation formulation;
+    list<BackendDAE> partitions;
+  end OPTIMIZATION_DATA;
+
   record MAIN
     list<Partition> ode                   "Partitions for differential-algebraic equations";
     list<Partition> algebraic             "Partitions for algebraic equations";
@@ -124,6 +150,7 @@ public
     Events.EventInfo eventInfo            "contains time and state events";
     Partitioning.ClockedInfo clockedInfo  "contains information about clocked partitions";
     UnorderedMap<Path, Function> funcMap  "Function bodies";
+    Option<BackendDAE> optimizationData "Optional new-backend dynamic optimization artifacts";
   end MAIN;
 
   record JACOBIAN
@@ -138,8 +165,16 @@ public
   end JACOBIAN;
 
   record HESSIAN
-    VarData varData "Variable data";
-    EqData eqData   "Equation data";
+    VarData varData                   "Variable data";
+    EqData eqData                     "Equation data";
+    String name                       "unique HVP name";
+    JacobianType jacType              "corresponding function block type";
+    VariablePointers lambdaVars       "fixed reverse seed lambda";
+    VariablePointers directionVars    "forward direction seed v";
+    VariablePointers resultVars       "HVP result variables h";
+    VariablePointers tmpVars          "all internal tangent / adjoint / forward-over-reverse variables";
+    SparsityPattern sparsityPattern   "lower triangular Hessian sparsity pattern";
+    array<StrongComponent> comps      "sorted HVP equations";
   end HESSIAN;
 
   function toString
@@ -183,9 +218,20 @@ public
         tmp := tmp + SparsityPattern.toString(bdae.sparsityPattern) + "\n" + SparsityColoring.toString(bdae.sparsityColoring);
       then tmp;
 
-      case HESSIAN() then StringUtil.headline_1("Hessian: " + str) + "\n" +
-                              VarData.toString(bdae.varData, 1) + "\n" +
-                              EqData.toString(bdae.eqData, 1);
+      case HESSIAN() algorithm
+        tmp := StringUtil.headline_1(Jacobian.jacobianTypeString(bdae.jacType) + " Hessian-vector product " + bdae.name + ": " + str) + "\n";
+        tmp := tmp + BVariable.VariablePointers.toString(bdae.lambdaVars, "Lambda seed variables") + "\n";
+        tmp := tmp + BVariable.VariablePointers.toString(bdae.directionVars, "Direction seed variables") + "\n";
+        tmp := tmp + BVariable.VariablePointers.toString(bdae.resultVars, "HVP result variables") + "\n";
+        tmp := tmp + BVariable.VariablePointers.toString(bdae.tmpVars, "HVP temporary variables") + "\n";
+        tmp := tmp + SparsityPattern.toString(bdae.sparsityPattern) + "\n";
+        for i in 1:arrayLength(bdae.comps) loop
+          tmp := tmp + StrongComponent.toString(bdae.comps[i], i) + "\n";
+        end for;
+      then tmp;
+
+      case OPTIMIZATION_DATA() then StringUtil.headline_1("Optimization data: " + str) + "\n";
+      case OPTIMIZATION_PARTITION_DATA() then StringUtil.headline_1("Optimization partition data: " + bdae.name) + "\n";
       else algorithm
         Error.addMessage(Error.INTERNAL_ERROR, {getInstanceName() + " failed."});
       then fail();
@@ -268,7 +314,7 @@ public
   algorithm
     variableData := lowerVariableData(flatModel.variables);
     (equationData, variableData) := lowerEquationData(flatModel.equations, flatModel.algorithms, flatModel.initialEquations, flatModel.initialAlgorithms, variableData);
-    bdae := MAIN({}, {}, {}, {}, {}, {}, NONE(), NONE(), variableData, equationData, eventInfo, clockedInfo, lowerFunctions(funcMap));
+    bdae := MAIN({}, {}, {}, {}, {}, {}, NONE(), NONE(), variableData, equationData, eventInfo, clockedInfo, lowerFunctions(funcMap), NONE());
   end lower;
 
   function main
@@ -330,6 +376,7 @@ public
       (Partitioning.categorize,               "Categorize"),
       (Solve.main,                            "Solve"),
       (function Jacobian.main(kind = kind),   "Jacobian"),
+      (function Optimization.main(kind = kind), "Optimization"),
       (Initialization.minimizeHomotopySystem, "Minimize Homotopy System")
     };
 
