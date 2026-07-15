@@ -321,6 +321,7 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBASSC.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBBackendUtil.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBDifferentiate.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBProgram.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBForward.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBAdjoint.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NBackEnd/Util/NBReplacements.mo

@@ -42,6 +42,7 @@ encapsulated package NBAdjoint
 public
   import NBEquation;
   import NBForward;
+  import NBProgram;
   import NBVariable;
 
 protected
@@ -86,30 +87,11 @@ protected
   import Util;
 
 public
-  type Program = NBForward.Program;
-
   function create
-    "Create a symbolic adjoint program for lambda^T * F(x).
-
-     differentiationVars are x.
-     functionVars are the F rows seeded by lambda.
-     innerVars are dependent backend variables needed to propagate through
-     strong components, for example loop iteration variables and temporary
-     unknowns that are not mathematical rows of F.
-    "
-    input String name;
-    input VariablePointers differentiationVars;
-    input VariablePointers functionVars;
-    input VariablePointers innerVars;
-    input Option<array<StrongComponent>> strongComponents;
-    input UnorderedMap<Path, Function> funcMap;
-    input Boolean staticAsContinuous;
-    input Pointer<Integer> idx;
-    input NBForward.Allocation allocation = NBForward.Allocation.FRESH;
-    input Option<Program> baseProgram = NONE();
-    output Program program;
+    "Create a symbolic adjoint program for lambda^T * F(x)."
+    input NBProgram.Program program;
+    output NBProgram.Program adjointProgram;
   protected
-    Program base;
     list<StrongComponent> comps, primalComps, diffed_comps = {};
     UnorderedMap<ComponentRef, ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
 
@@ -117,61 +99,51 @@ public
     list<StrongComponent> compAdjComps;
     list<Pointer<Variable>> compNewVars;
     String seedName;
-    Boolean scalarized;
+    VariablePointers differentiationVars;
   algorithm
-    if isSome(baseProgram) then
-      base := Util.getOption(baseProgram);
-      comps := base.comps;
-      primalComps := base.primalComps;
-      scalarized := base.scalarized;
-    elseif isSome(strongComponents) then
-      comps := list(comp for comp guard(not StrongComponent.isDiscrete(comp)) in Util.getOption(strongComponents));
-      primalComps := comps;
-      scalarized := differentiationVars.scalarized;
+    comps := program.comps;
+    primalComps := program.primalComps;
+    differentiationVars := VariablePointers.fromList(program.domainVars, program.scalarized);
 
-      for c in comps loop
-        if not supportsStrongComponent(c) then
-          Error.addMessage(Error.INTERNAL_ERROR, {
-            getInstanceName() + " only supports SINGLE_COMPONENT, MULTI_COMPONENT, SLICED_COMPONENT, RESIZABLE_COMPONENT and ALGEBRAIC_LOOP in symbolic adjoint generation."
-          });
-          fail();
-        end if;
-        if Flags.isSet(Flags.DEBUG_ADJOINT) then
-          print("Primal component: " + StrongComponent.toString(c) + "\n");
-        end if;
-      end for;
-    else
-      Error.addMessage(Error.INTERNAL_ERROR, {getInstanceName() + " failed because neither strong components nor a base program were given."});
-      fail();
-    end if;
+    for c in comps loop
+      if not supportsStrongComponent(c) then
+        Error.addMessage(Error.INTERNAL_ERROR, {
+          getInstanceName() + " only supports SINGLE_COMPONENT, MULTI_COMPONENT, SLICED_COMPONENT, RESIZABLE_COMPONENT, GENERIC_COMPONENT, ALIAS and ALGEBRAIC_LOOP in symbolic adjoint generation."
+        });
+        fail();
+      end if;
+      if Flags.isSet(Flags.DEBUG_ADJOINT) then
+        print("Primal component: " + StrongComponent.toString(c) + "\n");
+      end if;
+    end for;
 
     if Flags.isSet(Flags.DEBUG_ADJOINT) then
       print("Differentiation variables before pDer creation:\n" + BVariable.VariablePointers.toString(differentiationVars, "Differentiation Variables") + "\n");
-      print("Function variables before seed creation:\n" + BVariable.VariablePointers.toString(functionVars, "Function Variables") + "\n");
-      print("Inner variables before pDer creation:\n" + BVariable.VariablePointers.toString(innerVars, "Inner Variables") + "\n");
+      print("Function variables before seed creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(program.rangeVars, program.scalarized), "Function Variables") + "\n");
+      print("Inner variables before pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(program.innerVars, program.scalarized), "Inner Variables") + "\n");
     end if;
 
     (diff_map, res_vars) := Forward.mapVariables(
-      VariablePointers.toList(differentiationVars),
-      name,
+      program.domainVars,
+      program.name,
       NBForward.VariableRole.ADJOINT_RESULT,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diff_map
     );
 
-    row_vars := VariablePointers.toList(functionVars);
-    (base_tmp_vars, _) := List.splitOnTrue(VariablePointers.toList(innerVars), function BVariable.isContinuous(staticAsContinuous = staticAsContinuous));
+    row_vars := program.rangeVars;
+    (base_tmp_vars, _) := List.splitOnTrue(program.innerVars, function BVariable.isContinuous(staticAsContinuous = program.staticAsContinuous));
 
-    seedName := if allocation == NBForward.Allocation.FRESH then name + "_LAMBDA" else name;
+    seedName := if program.allocation == NBProgram.Allocation.FRESH then program.name + "_LAMBDA" else program.name;
     (diff_map, seed_vars) := Forward.mapVariables(
       row_vars,
       seedName,
       NBForward.VariableRole.SEED,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diff_map
     );
 
@@ -183,11 +155,11 @@ public
 
     (diff_map, tmp_vars) := Forward.mapVariables(
       base_tmp_vars,
-      name,
+      program.name,
       NBForward.VariableRole.ADJOINT_TMP,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diff_map
     );
     baseTmpVarCandidates := getBaseTmpVarCandidates(base_tmp_vars, tmp_vars, diff_map);
@@ -197,9 +169,9 @@ public
       print("Diff map before component generation:\n" + diffMapToString(diff_map) + "\n");
     end if;
 
-    for comp in primalComps loop
+    for comp in comps loop
       (compAdjComps, compNewVars) := generateComponent(
-        comp, diff_map, funcMap, scalarized, staticAsContinuous, idx, name, differentiationVars, baseTmpVarCandidates);
+        comp, diff_map, program.funcMap, program.scalarized, program.staticAsContinuous, program.idx, program.name, differentiationVars, baseTmpVarCandidates);
 
       for ac in compAdjComps loop
         diffed_comps := ac :: diffed_comps;
@@ -223,18 +195,31 @@ public
       end for;
     end if;
 
-    program := NBForward.Program.PROGRAM(
-      name           = name,
+    adjointProgram := NBProgram.make(
+      name           = program.name,
+      kind           = NBProgram.Kind.ADJOINT,
+      level          = program.level + 1,
+      source         = SOME(program),
+      dependencies   = {},
+      sourceVars     = listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)),
       diffMap        = diff_map,
       primalComps    = primalComps,
       comps          = diffed_comps,
-      scalarized     = scalarized,
+      scalarized     = program.scalarized,
+      domainVars     = program.domainVars,
+      rangeVars      = res_vars,
+      innerVars      = tmp_vars,
       seedVars       = seed_vars,
       resultVars     = res_vars,
       tmpVars        = tmp_vars,
       seedBaseVars   = row_vars,
-      resultBaseVars = VariablePointers.toList(differentiationVars),
-      tmpBaseVars    = baseTmpVarCandidates
+      resultBaseVars = program.domainVars,
+      tmpBaseVars    = baseTmpVarCandidates,
+      funcMap        = program.funcMap,
+      staticAsContinuous = program.staticAsContinuous,
+      idx            = program.idx,
+      allocation     = program.allocation,
+      names          = program.names
     );
   end create;
 

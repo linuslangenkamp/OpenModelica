@@ -40,7 +40,6 @@ encapsulated package NBHessian
 "
 
 public
-  import NBEquation;
   import NBVariable;
   import NBJacobian.JacobianType;
 
@@ -60,6 +59,7 @@ protected
   import NBAdjoint;
   import NBEquation.EquationPointers;
   import NBForward;
+  import NBProgram;
   import NBVariable.VariablePointers;
   import StrongComponent = NBStrongComponent;
 
@@ -69,12 +69,9 @@ protected
   import UnorderedMap;
 
 public
-  type HessianType = enumeration(FORWARD_OVER_REVERSE, NONE);
-
   uniontype Hessian
     record HESSIAN
       String name;
-      HessianType hessianType;
       JacobianType jacType;
 
       VariablePointers variables;
@@ -98,7 +95,6 @@ public
       str := match hessian
         case HESSIAN() algorithm
           str := StringUtil.headline_1("Hessian " + hessian.name) + "\n";
-          str := str + "type: " + hessianTypeString(hessian.hessianType) + "\n";
           str := str + "jacType: " + BJacobian.jacobianTypeString(hessian.jacType) + "\n\n";
 
           str := str + BVariable.VariablePointers.toString(hessian.lambdaVars, "Lambda seed variables") + "\n";
@@ -135,111 +131,71 @@ public
     func := symbolicForwardOverReverse;
   end getModule;
 
-  function none
-    extends hessianInterface;
-  algorithm
-    hessian := NONE();
-  end none;
-
 protected
-  uniontype ForwardOverReverseProgram
-    "Local Hessian composition: tangent(primal), reverse(primal), tangent(reverse)."
-    record FORWARD_OVER_REVERSE_PROGRAM
-      String name;
-
-      UnorderedMap<ComponentRef, ComponentRef> directionMap;
-      UnorderedMap<ComponentRef, ComponentRef> reverseMap;
-      UnorderedMap<ComponentRef, ComponentRef> forwardReverseMap;
-
-      list<StrongComponent> tangentComps;
-      list<StrongComponent> reverseComps;
-      list<StrongComponent> forwardReverseComps;
-      list<StrongComponent> comps;
-
-      list<Pointer<Variable>> lambdaVars;
-      list<Pointer<Variable>> directionVars;
-      list<Pointer<Variable>> resultVars;
-      list<Pointer<Variable>> tmpVars;
-      list<Pointer<Variable>> unknownVars;
-      list<Pointer<Variable>> auxiliaryVars;
-      list<Pointer<Variable>> variables;
-    end FORWARD_OVER_REVERSE_PROGRAM;
-
-    function toString
-      input ForwardOverReverseProgram program;
-      output String str = "";
-    algorithm
-      str := match program
-        case FORWARD_OVER_REVERSE_PROGRAM() algorithm
-          str := StringUtil.headline_1("Forward-over-reverse Hessian program " + program.name) + "\n";
-          str := str + mapToString("Direction map", program.directionMap);
-          str := str + mapToString("Reverse map", program.reverseMap);
-          str := str + mapToString("Forward-over-reverse map", program.forwardReverseMap);
-
-          str := str + StringUtil.headline_2("Tangent components") + "\n";
-          for comp in program.tangentComps loop
-            str := str + StrongComponent.toString(comp) + "\n";
-          end for;
-
-          str := str + StringUtil.headline_2("Reverse components") + "\n";
-          for comp in program.reverseComps loop
-            str := str + StrongComponent.toString(comp) + "\n";
-          end for;
-
-          str := str + StringUtil.headline_2("Forward-over-reverse components") + "\n";
-          for comp in program.forwardReverseComps loop
-            str := str + StrongComponent.toString(comp) + "\n";
-          end for;
-        then str;
-      end match;
-    end toString;
-  end ForwardOverReverseProgram;
-
-  function hessianTypeString
-    input HessianType hessianType;
-    output String str;
-  algorithm
-    str := match hessianType
-      case HessianType.FORWARD_OVER_REVERSE then "[HVP-FORWARD-OVER-REVERSE]";
-      case HessianType.NONE                 then "[HVP-NONE]";
-                                          else "[HVP-ERR]";
-    end match;
-  end hessianTypeString;
-
   function printGeneration
     input String name;
-    input ForwardOverReverseProgram program;
     input Hessian hessian;
   algorithm
     print(StringUtil.headline_1("[symhessdump] " + name + " forward-over-reverse Hessian-vector product") + "\n");
-    print(ForwardOverReverseProgram.toString(program));
     print(Hessian.toString(hessian));
   end printGeneration;
 
-  function fromForwardOverReverseProgram
+  function fromProgram
     input String newName;
     input JacobianType jacType;
-    input ForwardOverReverseProgram program;
+    input NBProgram.Program program;
     output Hessian hessianValue;
+  protected
+    NBProgram.Flat flat;
+    list<Pointer<Variable>> lambdaVars, directionVars;
   algorithm
+    flat := NBProgram.flatten(program);
+    (lambdaVars, directionVars) := getHessianSeeds(program);
+
     hessianValue := Hessian.HESSIAN(
       name          = newName,
-      hessianType   = HessianType.FORWARD_OVER_REVERSE,
       jacType       = jacType,
-      variables     = VariablePointers.fromList(program.variables),
-      unknowns      = VariablePointers.fromList(program.unknownVars),
-      auxiliaries   = VariablePointers.fromList(program.auxiliaryVars),
-      resultVars    = VariablePointers.fromList(program.resultVars),
-      tmpVars       = VariablePointers.fromList(program.tmpVars),
-      lambdaVars    = VariablePointers.fromList(program.lambdaVars),
-      directionVars = VariablePointers.fromList(program.directionVars),
-      comps         = listArray(program.comps)
+      variables     = VariablePointers.fromList(flat.variables),
+      unknowns      = VariablePointers.fromList(flat.unknowns),
+      auxiliaries   = VariablePointers.fromList(flat.auxiliaries),
+      resultVars    = VariablePointers.fromList(flat.resultVars),
+      tmpVars       = VariablePointers.fromList(flat.tmpVars),
+      lambdaVars    = VariablePointers.fromList(lambdaVars),
+      directionVars = VariablePointers.fromList(directionVars),
+      comps         = listArray(flat.comps)
     );
 
     if Flags.isSet(Flags.JAC_DUMP) then
-      printGeneration(newName, program, hessianValue);
+      printGeneration(newName, hessianValue);
     end if;
-  end fromForwardOverReverseProgram;
+  end fromProgram;
+
+  function getHessianSeeds
+    input NBProgram.Program program;
+    output list<Pointer<Variable>> lambdaVars;
+    output list<Pointer<Variable>> directionVars;
+  protected
+    NBProgram.Program sourceProgram;
+  algorithm
+    lambdaVars := match program.source
+      case SOME(sourceProgram) guard(sourceProgram.kind == NBProgram.Kind.ADJOINT) then sourceProgram.seedVars;
+      else {};
+    end match;
+
+    directionVars := getDirectionSeeds(program.dependencies);
+  end getHessianSeeds;
+
+  function getDirectionSeeds
+    input list<NBProgram.Program> dependencies;
+    output list<Pointer<Variable>> directionVars = {};
+  algorithm
+    for dependency in dependencies loop
+      if dependency.kind == NBProgram.Kind.FORWARD and not listEmpty(dependency.seedVars) then
+        directionVars := dependency.seedVars;
+        return;
+      end if;
+    end for;
+  end getDirectionSeeds;
 
 public
   function symbolicForwardOverReverse
@@ -257,24 +213,27 @@ public
   protected
     String newName = name + "_HVP";
     Pointer<Integer> idx = Pointer.create(0);
-    ForwardOverReverseProgram program;
+    BVariable.checkVar rowFilter = BJacobian.getTmpFilterFunction(jacType);
+    list<Pointer<Variable>> functionVars, innerVars;
+    NBProgram.Program program;
   algorithm
     _ := equations;
     _ := full;
 
-    program := createForwardOverReverseFiltered(
+    (functionVars, innerVars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), rowFilter);
+
+    program := createForwardOverReverse(
       newName,
-      newName + "_REV",
-      BJacobian.getTmpFilterFunction(jacType),
       seedCandidates,
-      partialCandidates,
+      VariablePointers.fromList(functionVars, partialCandidates.scalarized),
+      VariablePointers.fromList(innerVars, partialCandidates.scalarized),
       strongComponents,
       funcMap,
       staticAsContinuous,
       idx
     );
 
-    hessian := SOME(fromForwardOverReverseProgram(
+    hessian := SOME(fromProgram(
       newName,
       jacType,
       program
@@ -304,7 +263,7 @@ public
   protected
     String newName = name;
     Pointer<Integer> idx = Pointer.create(0);
-    ForwardOverReverseProgram program;
+    NBProgram.Program program;
   algorithm
     _ := equations;
     _ := full;
@@ -320,44 +279,16 @@ public
       idx
     );
 
-    hessian := SOME(fromForwardOverReverseProgram(
+    hessian := SOME(fromProgram(
       newName,
       jacType,
       program
     ));
   end forFunctionVariables;
 
-  function forStrongComponents
-    "Convenience wrapper for direct strong-component HVP generation."
-    input VariablePointers seedCandidates;
-    input VariablePointers partialCandidates;
-    input EquationPointers equations;
-    input array<StrongComponent> comps;
-    input Option<Adjacency.Matrix> full;
-    input UnorderedMap<Path, Function> funcMap;
-    input String name;
-    input JacobianType jacType = JacobianType.NLS;
-    input Boolean staticAsContinuous;
-    output Option<Hessian> hessian;
-  protected
-    constant hessianInterface func = symbolicForwardOverReverse;
-  algorithm
-    hessian := func(
-      name                = name,
-      jacType             = jacType,
-      seedCandidates      = seedCandidates,
-      partialCandidates   = partialCandidates,
-      equations           = equations,
-      strongComponents    = SOME(comps),
-      full                = full,
-      funcMap             = funcMap,
-      staticAsContinuous  = staticAsContinuous
-    );
-  end forStrongComponents;
-
 protected
   function createForwardOverReverse
-    "Create tangent(reverse(primal)) for lambda^T * functionVars(differentiationVars)."
+    "Create forward(reverse(primal)) for lambda^T * functionVars(differentiationVars)."
     input String name;
     input VariablePointers differentiationVars;
     input VariablePointers functionVars;
@@ -366,11 +297,12 @@ protected
     input UnorderedMap<Path, Function> funcMap;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
-    output ForwardOverReverseProgram program;
+    output NBProgram.Program program;
   protected
-    NBAdjoint.Program reverseProgram;
+    NBProgram.Program primalProgram;
+    NBProgram.Program adjointProgram;
   algorithm
-    reverseProgram := NBAdjoint.create(
+    primalProgram := NBProgram.fromStrongComponents(
       name,
       differentiationVars,
       functionVars,
@@ -379,151 +311,16 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBForward.Allocation.FRESH
+      NBProgram.Allocation.FRESH
     );
 
-    program := createForwardOverReverseFromAdjoint(
-      name,
-      differentiationVars,
-      funcMap,
-      staticAsContinuous,
-      idx,
-      reverseProgram
+    adjointProgram := NBAdjoint.create(primalProgram);
+    adjointProgram := NBProgram.setNames(
+      adjointProgram,
+      NBProgram.names(name + "_V", "HVP_" + name, "FOR_" + name, cleanup = true)
     );
+    program := NBForward.create(adjointProgram);
   end createForwardOverReverse;
-
-  function createForwardOverReverseFiltered
-    "Create tangent(reverse(primal)) using the Jacobian row-filter convention."
-    input String name;
-    input String reverseName;
-    input BVariable.checkVar rowFilter;
-    input VariablePointers seedCandidates;
-    input VariablePointers partialCandidates;
-    input Option<array<StrongComponent>> strongComponents;
-    input UnorderedMap<Path, Function> funcMap;
-    input Boolean staticAsContinuous;
-    input Pointer<Integer> idx;
-    output ForwardOverReverseProgram program;
-  protected
-    NBAdjoint.Program reverseProgram;
-    list<Pointer<Variable>> functionVars, innerVars;
-  algorithm
-    (functionVars, innerVars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), rowFilter);
-
-    reverseProgram := NBAdjoint.create(
-      reverseName,
-      seedCandidates,
-      VariablePointers.fromList(functionVars, partialCandidates.scalarized),
-      VariablePointers.fromList(innerVars, partialCandidates.scalarized),
-      strongComponents,
-      funcMap,
-      staticAsContinuous,
-      idx
-    );
-
-    program := createForwardOverReverseFromAdjoint(
-      name,
-      seedCandidates,
-      funcMap,
-      staticAsContinuous,
-      idx,
-      reverseProgram
-    );
-  end createForwardOverReverseFiltered;
-
-  function createForwardOverReverseFromAdjoint
-    "Differentiate an already generated adjoint program in a forward direction."
-    input String name;
-    input VariablePointers differentiationVars;
-    input UnorderedMap<Path, Function> funcMap;
-    input Boolean staticAsContinuous;
-    input Pointer<Integer> idx;
-    input NBAdjoint.Program reverseProgram;
-    output ForwardOverReverseProgram program;
-  protected
-    list<StrongComponent> comps;
-
-    list<Pointer<Variable>> tmpVars;
-    list<Pointer<Variable>> unknownVars;
-    list<Pointer<Variable>> auxiliaryVars;
-    list<Pointer<Variable>> variables;
-
-    NBForward.Program tangentProgram;
-    NBForward.Program forwardReverseProgram;
-  algorithm
-    tangentProgram := NBForward.create(
-      name = "TAN_" + name,
-      differentiationVars = differentiationVars,
-      functionVars = VariablePointers.fromList({}, differentiationVars.scalarized),
-      innerVars = VariablePointers.fromList(listAppend(reverseProgram.seedBaseVars, reverseProgram.tmpBaseVars), differentiationVars.scalarized),
-      strongComponents = SOME(listArray(reverseProgram.primalComps)),
-      funcMap = funcMap,
-      staticAsContinuous = staticAsContinuous,
-      idx = idx,
-      allocation = NBForward.Allocation.FRESH,
-      seedName = name + "_V",
-      tmpName = "TAN_" + name,
-      cleanupAlgorithms = true
-    );
-
-    forwardReverseProgram := NBForward.create(
-      name = "FOR_" + name,
-      differentiationVars = VariablePointers.fromList({}, differentiationVars.scalarized),
-      functionVars = VariablePointers.fromList(reverseProgram.resultVars, reverseProgram.scalarized),
-      innerVars = VariablePointers.fromList(reverseProgram.tmpVars, reverseProgram.scalarized),
-      strongComponents = NONE(),
-      funcMap = funcMap,
-      staticAsContinuous = staticAsContinuous,
-      idx = idx,
-      allocation = NBForward.Allocation.FRESH,
-      baseProgram = SOME(reverseProgram),
-      initialMap = SOME(tangentProgram.diffMap),
-      resultName = "HVP_" + name,
-      tmpName = "FOR_" + name,
-      cleanupAlgorithms = true
-    );
-
-    comps := listAppend(tangentProgram.comps, listAppend(reverseProgram.comps, forwardReverseProgram.comps));
-
-    tmpVars := listAppend(
-      tangentProgram.tmpVars,
-      listAppend(
-        reverseProgram.resultVars,
-        listAppend(reverseProgram.tmpVars, forwardReverseProgram.tmpVars)
-      )
-    );
-
-    unknownVars := listAppend(forwardReverseProgram.resultVars, tmpVars);
-    auxiliaryVars := listAppend(reverseProgram.seedVars, tangentProgram.seedVars);
-    variables := listAppend(unknownVars, auxiliaryVars);
-
-    program := ForwardOverReverseProgram.FORWARD_OVER_REVERSE_PROGRAM(
-      name                = name,
-      directionMap        = tangentProgram.diffMap,
-      reverseMap          = reverseProgram.diffMap,
-      forwardReverseMap   = forwardReverseProgram.diffMap,
-      tangentComps        = tangentProgram.comps,
-      reverseComps        = reverseProgram.comps,
-      forwardReverseComps = forwardReverseProgram.comps,
-      comps               = comps,
-      lambdaVars          = reverseProgram.seedVars,
-      directionVars       = tangentProgram.seedVars,
-      resultVars          = forwardReverseProgram.resultVars,
-      tmpVars             = tmpVars,
-      unknownVars         = unknownVars,
-      auxiliaryVars       = auxiliaryVars,
-      variables           = variables
-    );
-  end createForwardOverReverseFromAdjoint;
-
-  function mapToString
-    input String title;
-    input UnorderedMap<ComponentRef, ComponentRef> map;
-    output String str;
-  algorithm
-    str := StringUtil.headline_3(title) + "\n";
-    str := str + UnorderedMap.toString(map, ComponentRef.toString, ComponentRef.toString, "\n  ", " -> ") + "\n";
-  end mapToString;
 
   annotation(__OpenModelica_Interface="nbackend");
 end NBHessian;

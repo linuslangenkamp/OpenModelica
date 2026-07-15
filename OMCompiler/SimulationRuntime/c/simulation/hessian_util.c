@@ -33,7 +33,7 @@
 
 LOWER_TRIANGULAR_SPARSITY* allocLowerTriangularSparsity(unsigned int size, unsigned int nnz)
 {
-  LOWER_TRIANGULAR_SPARSITY *sparsity = (LOWER_TRIANGULAR_SPARSITY*)calloc(1, sizeof(LOWER_TRIANGULAR_SPARSITY));
+  LOWER_TRIANGULAR_SPARSITY *sparsity = (LOWER_TRIANGULAR_SPARSITY*) calloc(1, sizeof(LOWER_TRIANGULAR_SPARSITY));
   if (sparsity == NULL)
   {
     return NULL;

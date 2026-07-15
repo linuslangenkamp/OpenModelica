@@ -41,6 +41,7 @@ encapsulated package NBForward
 "
 
 public
+  import NBProgram;
   import NBVariable;
 
 protected
@@ -65,7 +66,6 @@ protected
   import NBDifferentiate.DifferentiationArguments;
   import NBEquation.Equation;
   import Slice = NBSlice;
-  import NBVariable.VariablePointers;
   import StrongComponent = NBStrongComponent;
 
   // Util imports
@@ -75,11 +75,6 @@ protected
   import Util;
 
 public
-  type Allocation = enumeration(
-    REUSE "Use NBVariable seed/pDer partner variables",
-    FRESH "Always allocate a fresh role-named derivative variable"
-  );
-
   type VariableRole = enumeration(
     SEED,
     RESULT,
@@ -88,104 +83,57 @@ public
     ADJOINT_TMP
   );
 
-  uniontype Program
-    record PROGRAM
-      String name;
-      UnorderedMap<ComponentRef, ComponentRef> diffMap;
-      list<StrongComponent> primalComps;
-      list<StrongComponent> comps;
-      Boolean scalarized;
-      list<Pointer<Variable>> seedVars;
-      list<Pointer<Variable>> resultVars;
-      list<Pointer<Variable>> tmpVars;
-      list<Pointer<Variable>> seedBaseVars;
-      list<Pointer<Variable>> resultBaseVars;
-      list<Pointer<Variable>> tmpBaseVars;
-    end PROGRAM;
-  end Program;
-
   function create
-    "Create a symbolic forward-mode program.
+    "Forward differentiate a staged backend program."
+    input NBProgram.Program program;
+    output NBProgram.Program forwardProgram;
+  algorithm
+    forwardProgram := createForward(program);
+  end create;
 
-     differentiationVars are the independent variables x.
-     functionVars are the requested rows F.
-     innerVars are dependent backend variables that need tangents but are not rows.
-     If baseProgram is given, its generated components are differentiated. This
-     is the chaining API used for forward-over-adjoint Hessian-vector products.
-    "
-    input String name;
-    input VariablePointers differentiationVars;
-    input VariablePointers functionVars;
-    input VariablePointers innerVars;
-    input Option<array<StrongComponent>> strongComponents;
-    input UnorderedMap<Path, Function> funcMap;
-    input Boolean staticAsContinuous;
-    input Pointer<Integer> idx;
-    input Allocation allocation = Allocation.FRESH;
-    input Option<Program> baseProgram = NONE();
-    input Option<UnorderedMap<ComponentRef, ComponentRef>> initialMap = NONE();
-    input String seedName = "";
-    input String resultName = "";
-    input String tmpName = "";
-    input Boolean cleanupAlgorithms = false;
-    output Program program;
+protected
+  function createForward
+    input NBProgram.Program program;
+    output NBProgram.Program forwardProgram;
   protected
-    Program base;
-    list<StrongComponent> primalComps, comps;
+    NBProgram.Names names;
     list<Pointer<Variable>> seedBaseVars, resultSourceVars, resultBaseVars, tmpBaseVars;
     list<Pointer<Variable>> resultVars = {}, tmpVars = {}, seedVars = {};
     UnorderedMap<ComponentRef, ComponentRef> diffMap;
     list<StrongComponent> diffedComps;
-    Boolean scalarized;
-    String seedPrefix = if seedName == "" then name else seedName;
-    String resultPrefix = if resultName == "" then name else resultName;
-    String tmpPrefix = if tmpName == "" then name else tmpName;
+    list<NBProgram.Program> dependencies;
+    String seedPrefix, resultPrefix, tmpPrefix, contextName;
+    Boolean cleanupAlgorithms;
   algorithm
-    diffMap := match initialMap
-      case SOME(diffMap) then UnorderedMap.copy(diffMap);
-      else UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
-    end match;
+    (dependencies, diffMap) := createDerivativeDependencies(program);
 
-    if isSome(baseProgram) then
-      base := Util.getOption(baseProgram);
-      primalComps := base.primalComps;
-      comps := base.comps;
-      scalarized := base.scalarized;
-    else
-      if isSome(strongComponents) then
-        comps := list(comp for comp guard(not StrongComponent.isDiscrete(comp)) in Util.getOption(strongComponents));
-        primalComps := comps;
-        scalarized := differentiationVars.scalarized;
-      else
-        Error.addMessage(Error.INTERNAL_ERROR, {getInstanceName() + " failed because neither strong components nor a base program were given."});
-        fail();
-      end if;
-    end if;
+    NBProgram.Names.NAMES(seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms) := program.names;
+    contextName := if tmpPrefix <> "" then tmpPrefix else program.name;
 
-    seedBaseVars := VariablePointers.toList(differentiationVars);
+    seedBaseVars := program.domainVars;
     (diffMap, seedVars) := mapVariables(
       seedBaseVars,
       seedPrefix,
       VariableRole.SEED,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diffMap,
       seedVars
     );
 
-    resultSourceVars := VariablePointers.toList(functionVars);
-    resultBaseVars := getNamingVars(resultSourceVars, baseProgram);
-    tmpBaseVars := list(var for var guard(BVariable.isContinuous(var, staticAsContinuous)) in VariablePointers.toList(innerVars));
+    resultSourceVars := program.rangeVars;
+    resultBaseVars := getNamingVars(resultSourceVars, program.resultBaseVars);
+    tmpBaseVars := list(var for var guard(BVariable.isContinuous(var, program.staticAsContinuous)) in program.innerVars);
 
-    (diffMap, resultVars, _) := mapVariablesWithNaming(
+    (diffMap, resultVars) := mapVariablesWithNaming(
       resultSourceVars,
       SOME(resultBaseVars),
       resultPrefix,
       VariableRole.RESULT,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diffMap
     );
 
@@ -193,44 +141,164 @@ public
       tmpBaseVars,
       tmpPrefix,
       VariableRole.TMP,
-      allocation,
-      staticAsContinuous,
-      idx,
+      program.allocation,
+      program.staticAsContinuous,
+      program.idx,
       diffMap,
       tmpVars
     );
 
     diffedComps := differentiateStrongComponentList(
-      comps,
+      program.comps,
       diffMap,
-      funcMap,
-      scalarized,
-      idx,
-      name,
+      program.funcMap,
+      program.scalarized,
+      program.idx,
+      contextName,
       cleanupAlgorithms
     );
 
-    program := Program.PROGRAM(
-      name           = name,
+    forwardProgram := NBProgram.make(
+      name           = program.name,
+      kind           = NBProgram.Kind.FORWARD,
+      level          = program.level + 1,
+      source         = SOME(program),
+      dependencies   = dependencies,
+      sourceVars     = listAppend(seedBaseVars, listAppend(resultSourceVars, tmpBaseVars)),
       diffMap        = diffMap,
-      primalComps    = primalComps,
+      primalComps    = program.primalComps,
       comps          = diffedComps,
-      scalarized     = scalarized,
+      scalarized     = program.scalarized,
+      domainVars     = program.domainVars,
+      rangeVars      = resultVars,
+      innerVars      = tmpVars,
       seedVars       = seedVars,
       resultVars     = resultVars,
       tmpVars        = tmpVars,
       seedBaseVars   = seedBaseVars,
       resultBaseVars = resultBaseVars,
-      tmpBaseVars    = tmpBaseVars
+      tmpBaseVars    = tmpBaseVars,
+      funcMap        = program.funcMap,
+      staticAsContinuous = program.staticAsContinuous,
+      idx            = program.idx,
+      allocation     = program.allocation,
+      names          = program.names
     );
-  end create;
+  end createForward;
 
+  function createDerivativeDependencies
+    "Create the staged programs whose derivative maps are needed before
+     differentiating the given program."
+    input NBProgram.Program program;
+    output list<NBProgram.Program> dependencies = {};
+    output UnorderedMap<ComponentRef, ComponentRef> diffMap =
+      UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
+  protected
+    NBProgram.Program source;
+    NBProgram.Program tangentInput;
+    NBProgram.Program tangentProgram;
+    NBProgram.Program derivativeDependency;
+  algorithm
+    if program.kind == NBProgram.Kind.FORWARD then
+      diffMap := UnorderedMap.copy(program.diffMap);
+    end if;
+
+    for dependency in program.dependencies loop
+      if not isProgramSource(dependency, program.source) then
+        derivativeDependency := create(dependency);
+        dependencies := derivativeDependency :: dependencies;
+        mergeDiffMap(derivativeDependency.diffMap, diffMap);
+      end if;
+    end for;
+
+    if program.kind <> NBProgram.Kind.FORWARD and isSome(program.source) and not listEmpty(program.sourceVars) then
+      source := Util.getOption(program.source);
+      tangentInput := NBProgram.make(
+        name           = "TAN_" + program.name,
+        kind           = NBProgram.Kind.PRIMAL,
+        level          = source.level,
+        source         = NONE(),
+        dependencies   = {},
+        sourceVars     = {},
+        diffMap        = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual),
+        primalComps    = source.primalComps,
+        comps          = source.comps,
+        scalarized     = source.scalarized,
+        domainVars     = source.domainVars,
+        rangeVars      = {},
+        innerVars      = program.sourceVars,
+        seedVars       = {},
+        resultVars     = {},
+        tmpVars        = {},
+        seedBaseVars   = {},
+        resultBaseVars = {},
+        tmpBaseVars    = {},
+        funcMap        = program.funcMap,
+        staticAsContinuous = program.staticAsContinuous,
+        idx            = program.idx,
+        allocation     = NBProgram.Allocation.FRESH,
+        names          = NBProgram.names(program.name + "_V", "", "TAN_" + program.name, cleanup = true)
+      );
+
+      tangentProgram := create(tangentInput);
+      dependencies := tangentProgram :: dependencies;
+      mergeDiffMap(tangentProgram.diffMap, diffMap);
+    end if;
+
+    if program.kind <> NBProgram.Kind.PRIMAL then
+      dependencies := program :: dependencies;
+    end if;
+
+    dependencies := listReverse(dependencies);
+  end createDerivativeDependencies;
+
+  function isProgramSource
+    input NBProgram.Program dependency;
+    input Option<NBProgram.Program> source;
+    output Boolean isSource;
+  protected
+    NBProgram.Program sourceProgram;
+  algorithm
+    isSource := match source
+      case SOME(sourceProgram) then dependency.name == sourceProgram.name
+        and dependency.kind == sourceProgram.kind
+        and dependency.level == sourceProgram.level;
+      else false;
+    end match;
+  end isProgramSource;
+
+  function mergeDiffMap
+    input UnorderedMap<ComponentRef, ComponentRef> from;
+    input UnorderedMap<ComponentRef, ComponentRef> into;
+  protected
+    ComponentRef key;
+    ComponentRef value;
+    ComponentRef existing;
+  algorithm
+    for entry in UnorderedMap.toList(from) loop
+      (key, value) := entry;
+      () := match UnorderedMap.get(key, into)
+        case SOME(existing) guard(ComponentRef.isEqual(existing, value)) then ();
+        case SOME(existing) algorithm
+          Error.addMessage(Error.INTERNAL_ERROR, {
+            getInstanceName() + " got conflicting derivative mappings for " + ComponentRef.toString(key)
+            + ": " + ComponentRef.toString(existing) + " and " + ComponentRef.toString(value)
+          });
+        then fail();
+        else algorithm
+          UnorderedMap.add(key, value, into);
+        then ();
+      end match;
+    end for;
+  end mergeDiffMap;
+
+public
   function mapVariables
     "Map base variables to derivative variables for one forward/adjoint role."
     input list<Pointer<Variable>> baseVars;
     input String name;
     input VariableRole role;
-    input Allocation allocation;
+    input NBProgram.Allocation allocation;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
@@ -305,56 +373,32 @@ protected
 
   function getNamingVars
     input list<Pointer<Variable>> sourceVars;
-    input Option<Program> baseProgram;
-    output list<Pointer<Variable>> namingVars = {};
-  protected
-    Program base;
+    input list<Pointer<Variable>> baseVars;
+    output list<Pointer<Variable>> namingVars;
   algorithm
-    if isSome(baseProgram) then
-      base := Util.getOption(baseProgram);
-      for sourceVar in sourceVars loop
-        namingVars := lookupBaseVar(sourceVar, base.resultVars, base.resultBaseVars) :: namingVars;
-      end for;
-      namingVars := listReverse(namingVars);
-    else
+    if listEmpty(baseVars) then
       namingVars := sourceVars;
+    elseif listLength(sourceVars) == listLength(baseVars) then
+      namingVars := baseVars;
+    else
+      Error.addMessage(Error.INTERNAL_ERROR, {
+        getInstanceName() + " got mismatching source and naming variables."
+      });
+      fail();
     end if;
   end getNamingVars;
-
-  function lookupBaseVar
-    input Pointer<Variable> sourceVar;
-    input list<Pointer<Variable>> generatedVars;
-    input list<Pointer<Variable>> baseVars;
-    output Pointer<Variable> baseVar = sourceVar;
-  protected
-    list<Pointer<Variable>> generatedRest = generatedVars;
-    list<Pointer<Variable>> baseRest = baseVars;
-    Pointer<Variable> generatedVar;
-    Pointer<Variable> candidateBaseVar;
-    ComponentRef sourceCref = BVariable.getVarName(sourceVar);
-  algorithm
-    while not listEmpty(generatedRest) and not listEmpty(baseRest) loop
-      generatedVar :: generatedRest := generatedRest;
-      candidateBaseVar :: baseRest := baseRest;
-      if ComponentRef.isEqual(sourceCref, BVariable.getVarName(generatedVar)) then
-        baseVar := candidateBaseVar;
-        return;
-      end if;
-    end while;
-  end lookupBaseVar;
 
   function mapVariablesWithNaming
     input list<Pointer<Variable>> sourceVars;
     input Option<list<Pointer<Variable>>> namingVarsOpt;
     input String name;
     input VariableRole role;
-    input Allocation allocation;
+    input NBProgram.Allocation allocation;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
     output UnorderedMap<ComponentRef, ComponentRef> mapOut;
     output list<Pointer<Variable>> tangentVars;
-    output list<Pointer<Variable>> mappedSourceVars;
   protected
     list<Pointer<Variable>> srcRest;
     list<Pointer<Variable>> namingRest;
@@ -366,7 +410,6 @@ protected
   algorithm
     mapOut := mapIn;
     tangentVars := {};
-    mappedSourceVars := {};
 
     namingRest := match namingVarsOpt
       case SOME(namingRest) algorithm
@@ -399,12 +442,10 @@ protected
 
       if mapped and not ComponentRef.isEmpty(tangentCref) then
         tangentVars := tangentVar :: tangentVars;
-        mappedSourceVars := sourceVar :: mappedSourceVars;
       end if;
     end while;
 
     tangentVars := listReverse(tangentVars);
-    mappedSourceVars := listReverse(mappedSourceVars);
   end mapVariablesWithNaming;
 
   function mapVariableWithNaming
@@ -412,7 +453,7 @@ protected
     input Pointer<Variable> namingVar;
     input String name;
     input VariableRole role;
-    input Allocation allocation;
+    input NBProgram.Allocation allocation;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
@@ -474,7 +515,7 @@ protected
     input Pointer<Variable> baseVar;
     input String name;
     input VariableRole role;
-    input Allocation allocation;
+    input NBProgram.Allocation allocation;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
@@ -534,12 +575,12 @@ protected
     input Pointer<Variable> baseVar;
     input String name;
     input VariableRole role;
-    input Allocation allocation;
+    input NBProgram.Allocation allocation;
     input Pointer<Integer> idx;
     output ComponentRef cref;
     output Pointer<Variable> varPtr;
   algorithm
-    if allocation == Allocation.REUSE then
+    if allocation == NBProgram.Allocation.REUSE then
       (cref, varPtr) := makeReusableVariable(BVariable.getVarName(baseVar), name, role);
     else
       (cref, varPtr) := makeFreshVariable(baseVar, name, role, idx);

@@ -324,6 +324,7 @@ if true then /* Suppress output */
     "../NBackEnd/Util/NBASSC.mo",
     "../NBackEnd/Util/NBBackendUtil.mo",
     "../NBackEnd/Util/NBDifferentiate.mo",
+    "../NBackEnd/Util/NBProgram.mo",
     "../NBackEnd/Util/NBForward.mo",
     "../NBackEnd/Util/NBAdjoint.mo",
     "../NBackEnd/Util/NBReplacements.mo",

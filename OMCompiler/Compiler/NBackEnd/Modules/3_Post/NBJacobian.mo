@@ -64,6 +64,7 @@ protected
   import NBAdjoint;
   import NBEquation.{Equation, EquationPointers, EqData};
   import NBForward;
+  import NBProgram;
   import Jacobian = NBackendDAE.BackendDAE;
   import Matching = NBMatching;
   import Partition = NBPartition;
@@ -1299,11 +1300,12 @@ protected
 
     BVariable.checkVar func = getTmpFilterFunction(jacType);
     list<Pointer<Variable>> row_vars, inner_vars;
-    NBForward.Program program;
+    NBProgram.Program primalProgram, program;
+    NBProgram.Flat flat;
   algorithm
     (row_vars, inner_vars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), func);
 
-    program := NBForward.create(
+    primalProgram := NBProgram.fromStrongComponents(
       name,
       seedCandidates,
       VariablePointers.fromList(row_vars, partialCandidates.scalarized),
@@ -1312,17 +1314,18 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBForward.Allocation.REUSE
+      NBProgram.Allocation.REUSE
     );
+    program := NBForward.create(primalProgram);
+    flat := NBProgram.flatten(program);
 
     // collect var data (most of this can be removed)
-    res_vars      := program.resultVars;
-    tmp_vars      := program.tmpVars;
-    seed_vars     := program.seedVars;
-    unknown_vars  := listAppend(res_vars, tmp_vars);
-    all_vars      := unknown_vars;  // add other vars later on
-
-    aux_vars      := seed_vars;     // add other auxiliaries later on
+    res_vars      := flat.resultVars;
+    tmp_vars      := flat.tmpVars;
+    seed_vars     := flat.seedVars;
+    unknown_vars  := flat.unknowns;
+    all_vars      := flat.variables;
+    aux_vars      := flat.auxiliaries;
     alias_vars    := {};
     depend_vars   := {};
 
@@ -1338,20 +1341,13 @@ protected
       seedVars      = VariablePointers.fromList(seed_vars)
     );
 
-    if isSome(full) then
-      //sparsity := Adjacency.Matrix.fullToSparsity(Util.getOption(full), comps);
-    else
-      Error.addMessage(Error.INTERNAL_ERROR,{getInstanceName() + " failed because full adjacency matrix to create sparsity pattern is missing."});
-      fail();
-    end if;
-
     (sparsityPattern, sparsityColoring) := SparsityPattern.create(seedCandidates, partialCandidates, strongComponents, jacType, staticAsContinuous);
 
     jacobian := SOME(Jacobian.JACOBIAN(
       name              = name,
       jacType           = jacType,
       varData           = varDataJac,
-      comps             = listArray(program.comps),
+      comps             = listArray(flat.comps),
       // sparsity
       sparsityPattern   = sparsityPattern,
       sparsityColoring  = sparsityColoring,
@@ -1372,12 +1368,13 @@ protected
     String newName;
     BVariable.checkVar func = getTmpFilterFunction(jacType);
     list<Pointer<Variable>> row_vars, inner_vars;
-    NBAdjoint.Program program;
+    NBProgram.Program primalProgram, program;
+    NBProgram.Flat flat;
   algorithm
     newName := name + "_ADJ";
     (row_vars, inner_vars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), func);
 
-    program := NBAdjoint.create(
+    primalProgram := NBProgram.fromStrongComponents(
       newName,
       seedCandidates,
       VariablePointers.fromList(row_vars, partialCandidates.scalarized),
@@ -1386,17 +1383,18 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBForward.Allocation.REUSE
+      NBProgram.Allocation.REUSE
     );
+    program := NBAdjoint.create(primalProgram);
+    flat := NBProgram.flatten(program);
 
     // collect var data (most of this can be removed)
-    res_vars     := program.resultVars;
-    tmp_vars     := program.tmpVars;
-    seed_vars    := program.seedVars;
-    unknown_vars  := listAppend(res_vars, tmp_vars);
-    all_vars      := unknown_vars;  // add other vars later on
-
-    aux_vars      := seed_vars;     // add other auxiliaries later on. TODO: Need to add the SSA vars and the lambda vars from algebraic loops as auxiliaries?
+    res_vars      := flat.resultVars;
+    tmp_vars      := flat.tmpVars;
+    seed_vars     := flat.seedVars;
+    unknown_vars  := flat.unknowns;
+    all_vars      := flat.variables;
+    aux_vars      := flat.auxiliaries;
     alias_vars    := {};
     depend_vars   := {};
 
@@ -1423,7 +1421,7 @@ protected
       name              = newName,
       jacType           = jacType,
       varData           = varDataJac,
-      comps             = listArray(program.comps),
+      comps             = listArray(flat.comps),
       sparsityPattern   = sparsityPattern,
       sparsityColoring  = sparsityColoring,
       isAdjoint         = true
