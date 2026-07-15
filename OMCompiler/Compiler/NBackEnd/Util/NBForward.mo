@@ -93,7 +93,7 @@ protected
     UnorderedMap<ComponentRef, ComponentRef> diffMap;
     list<StrongComponent> diffedComps;
     list<NBProgram.Program> dependencies;
-    String seedPrefix, resultPrefix, tmpPrefix, contextName;
+    String seedPrefix, resultPrefix, tmpPrefix, contextName, debugOrigin;
     Boolean cleanupAlgorithms;
   algorithm
     (dependencies, diffMap) := createDerivativeDependencies(program);
@@ -102,7 +102,8 @@ protected
       seedPrefix = seedPrefix,
       resultPrefix = resultPrefix,
       tmpPrefix = tmpPrefix,
-      cleanupAlgorithms = cleanupAlgorithms) := program.options;
+      cleanupAlgorithms = cleanupAlgorithms,
+      debugOrigin = debugOrigin) := program.options;
     contextName := if tmpPrefix <> "" then tmpPrefix else program.name;
 
     seedBaseVars := program.domainVars;
@@ -150,7 +151,8 @@ protected
       program.scalarized,
       program.idx,
       contextName,
-      cleanupAlgorithms
+      cleanupAlgorithms,
+      debugOrigin
     );
 
     forwardProgram := NBProgram.fromTransform(
@@ -278,10 +280,14 @@ protected
     input Pointer<Integer> idx;
     input String contextName;
     input Boolean cleanupAlgorithms = false;
+    input String debugOrigin = "";
     output list<StrongComponent> diffedComps;
   protected
     DifferentiationArguments diffArguments;
+    String origin;
   algorithm
+    origin := if debugOrigin <> "" then debugOrigin else getInstanceName();
+
     diffArguments := Differentiate.DIFFERENTIATION_ARGUMENTS(
       diffCref        = ComponentRef.EMPTY(),
       new_vars        = {},
@@ -299,7 +305,7 @@ protected
       diffArguments,
       idx,
       contextName,
-      getInstanceName()
+      origin
     );
 
     if cleanupAlgorithms then

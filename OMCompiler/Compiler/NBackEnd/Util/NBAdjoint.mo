@@ -132,6 +132,7 @@ public
       program.idx,
       diff_map
     );
+    res_vars := listReverse(res_vars);
 
     row_vars := program.rangeVars;
     (base_tmp_vars, _) := List.splitOnTrue(program.innerVars, function BVariable.isContinuous(staticAsContinuous = program.staticAsContinuous));
@@ -146,6 +147,7 @@ public
       program.idx,
       diff_map
     );
+    seed_vars := listReverse(seed_vars);
 
     if Flags.isSet(Flags.DEBUG_ADJOINT) then
       print("seed vars after seed creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(seed_vars), "Seed Vars") + "\n");
@@ -162,6 +164,7 @@ public
       program.idx,
       diff_map
     );
+    tmp_vars := listReverse(tmp_vars);
     baseTmpVarCandidates := getBaseTmpVarCandidates(base_tmp_vars, tmp_vars, diff_map);
 
     if Flags.isSet(Flags.DEBUG_ADJOINT) then
@@ -209,8 +212,8 @@ public
         seedVars       = seed_vars,
         resultVars     = res_vars,
         tmpVars        = tmp_vars,
-        seedBaseVars   = row_vars,
-        resultBaseVars = program.domainVars,
+        seedBaseVars   = listReverse(row_vars),
+        resultBaseVars = listReverse(program.domainVars),
         tmpBaseVars    = baseTmpVarCandidates)
     );
   end create;

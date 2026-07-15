@@ -552,7 +552,42 @@ public
           list(List.map(group, function UnorderedMap.getOrFail(map = idx_map)) for group in coloring.cols),
           list(List.map(group, function UnorderedMap.getOrFail(map = idx_map)) for group in coloring.rows));
       end match;
+      simColoringCols := sortColoringGroups(simColoringCols);
+      simColoringRows := sortColoringGroups(simColoringRows);
     end createSparsityColoring;
+
+    function sortColoringGroups
+      "Sort color groups by their first local row/column index for stable output.
+       The variables inside each color group keep the backend coloring order."
+      input SparsityColoring coloringIn;
+      output SparsityColoring coloringOut;
+    algorithm
+      coloringOut := List.sort(coloringIn, coloringGroupGt);
+    end sortColoringGroups;
+
+    function coloringGroupGt
+      input list<Integer> group1;
+      input list<Integer> group2;
+      output Boolean gt;
+    algorithm
+      gt := coloringGroupMin(group1) > coloringGroupMin(group2);
+    end coloringGroupGt;
+
+    function coloringGroupMin
+      input list<Integer> group;
+      output Integer minIdx = 0;
+    algorithm
+      if listEmpty(group) then
+        return;
+      end if;
+
+      minIdx := listHead(group);
+      for idx in listRest(group) loop
+        if idx < minIdx then
+          minIdx := idx;
+        end if;
+      end for;
+    end coloringGroupMin;
 
     function empty
       input String name = "";

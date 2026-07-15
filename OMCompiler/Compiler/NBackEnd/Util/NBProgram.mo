@@ -90,6 +90,7 @@ public
       String     resultPrefix      "Prefix/name context for derivative result variables";
       String     tmpPrefix         "Prefix/name context for derivative temporary variables";
       Boolean    cleanupAlgorithms "Drop non-derivative assignments from differentiated algorithms";
+      String     debugOrigin       "Optional diagnostic origin passed to the low-level differentiator";
     end OPTIONS;
   end Options;
 
@@ -180,7 +181,7 @@ public
      Uses the same name context for seeds, results and temporaries."
     input String name;
     input Allocation allocation = Allocation.FRESH;
-    output Options options = Options.OPTIONS(allocation, name, name, name, false);
+    output Options options = Options.OPTIONS(allocation, name, name, name, false, "");
   end defaultOptions;
 
   function options
@@ -191,7 +192,8 @@ public
     input String resultPrefix;
     input String tmpPrefix;
     input Boolean cleanupAlgorithms = false;
-    output Options outOptions = Options.OPTIONS(allocation, seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms);
+    input String debugOrigin = "";
+    output Options outOptions = Options.OPTIONS(allocation, seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms, debugOrigin);
   end options;
 
   function fromStrongComponents

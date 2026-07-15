@@ -1313,12 +1313,17 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBProgram.defaultOptions(name, NBProgram.Allocation.REUSE)
+      NBProgram.options(
+        NBProgram.Allocation.REUSE,
+        name,
+        name,
+        name,
+        debugOrigin = getInstanceName())
     );
     program := NBForward.create(primalProgram);
     flat := NBProgram.flatten(program);
 
-    varDataJac := varDataFromFlat(flat, partialCandidates);
+    varDataJac := varDataFromFlat(flat, partialCandidates, reverseSeeds = true);
 
     (sparsityPattern, sparsityColoring) := SparsityPattern.create(seedCandidates, partialCandidates, strongComponents, jacType, staticAsContinuous);
 
@@ -1338,18 +1343,25 @@ protected
   function varDataFromFlat
     input NBProgram.Flat flat;
     input VariablePointers diffVars;
+    input Boolean reverseSeeds = false;
     output BVariable.VarData varData;
+  protected
+    list<Pointer<Variable>> seedVars;
+    list<Pointer<Variable>> variables;
   algorithm
+    seedVars := if reverseSeeds then listReverse(flat.seedVars) else flat.seedVars;
+    variables := listAppend(flat.unknowns, seedVars);
+
     varData := BVariable.VAR_DATA_JAC(
-      variables     = VariablePointers.fromList(flat.variables),
+      variables     = VariablePointers.fromList(variables),
       unknowns      = VariablePointers.fromList(flat.unknowns),
-      auxiliaries   = VariablePointers.fromList(flat.auxiliaries),
+      auxiliaries   = VariablePointers.fromList(seedVars),
       aliasVars     = VariablePointers.fromList({}),
       diffVars      = diffVars,
       dependencies  = VariablePointers.fromList({}),
       resultVars    = VariablePointers.fromList(flat.resultVars),
       tmpVars       = VariablePointers.fromList(flat.tmpVars),
-      seedVars      = VariablePointers.fromList(flat.seedVars)
+      seedVars      = VariablePointers.fromList(seedVars)
     );
   end varDataFromFlat;
 
@@ -1379,7 +1391,12 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBProgram.defaultOptions(newName, NBProgram.Allocation.REUSE)
+      NBProgram.options(
+        NBProgram.Allocation.REUSE,
+        newName,
+        newName,
+        newName,
+        debugOrigin = getInstanceName())
     );
     program := NBAdjoint.create(primalProgram);
     flat := NBProgram.flatten(program);
