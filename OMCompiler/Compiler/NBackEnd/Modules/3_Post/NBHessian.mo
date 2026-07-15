@@ -70,20 +70,21 @@ protected
 
 public
   uniontype Hessian
+    "Symbolic Hessian-vector product program before lowering to BackendDAE."
     record HESSIAN
-      String name;
-      JacobianType jacType;
+      String       name    "unique HVP name";
+      JacobianType jacType "corresponding function block type";
 
-      VariablePointers variables;
-      VariablePointers unknowns;
-      VariablePointers auxiliaries;
+      VariablePointers variables   "all generated HVP variables";
+      VariablePointers unknowns    "generated HVP unknowns";
+      VariablePointers auxiliaries "generated HVP auxiliaries";
 
-      VariablePointers resultVars       "HVP result variables h";
-      VariablePointers tmpVars          "all internal tangent / adjoint / forward-over-reverse variables";
-      VariablePointers lambdaVars       "fixed reverse seed lambda";
-      VariablePointers directionVars    "forward direction seed v";
+      VariablePointers resultVars    "HVP result variables h";
+      VariablePointers tmpVars       "all internal tangent / adjoint / forward-over-reverse variables";
+      VariablePointers lambdaVars    "fixed reverse seed lambda";
+      VariablePointers directionVars "forward direction seed v";
 
-      array<StrongComponent> comps;
+      array<StrongComponent> comps "ordered HVP components";
     end HESSIAN;
 
     function toString
@@ -132,6 +133,16 @@ public
   end getModule;
 
 protected
+  uniontype Composition
+    "Local result of composing forward-over-reverse for one HVP.
+     Keeps the final program and its two seed vectors explicit."
+    record COMPOSITION
+      NBProgram.Program       program       "final forward-over-adjoint HVP program";
+      list<Pointer<Variable>> lambdaVars    "reverse seed variables from the adjoint stage";
+      list<Pointer<Variable>> directionVars "forward direction seed variables";
+    end COMPOSITION;
+  end Composition;
+
   function printGeneration
     input String name;
     input Hessian hessian;
@@ -140,17 +151,17 @@ protected
     print(Hessian.toString(hessian));
   end printGeneration;
 
-  function fromProgram
+  function fromComposition
+    "Flatten a composed HVP program into the public Hessian container.
+     Seed vectors are taken from Composition instead of rediscovered later."
     input String newName;
     input JacobianType jacType;
-    input NBProgram.Program program;
+    input Composition composition;
     output Hessian hessianValue;
   protected
     NBProgram.Flat flat;
-    list<Pointer<Variable>> lambdaVars, directionVars;
   algorithm
-    flat := NBProgram.flatten(program);
-    (lambdaVars, directionVars) := getHessianSeeds(program);
+    flat := NBProgram.flatten(composition.program);
 
     hessianValue := Hessian.HESSIAN(
       name          = newName,
@@ -160,30 +171,15 @@ protected
       auxiliaries   = VariablePointers.fromList(flat.auxiliaries),
       resultVars    = VariablePointers.fromList(flat.resultVars),
       tmpVars       = VariablePointers.fromList(flat.tmpVars),
-      lambdaVars    = VariablePointers.fromList(lambdaVars),
-      directionVars = VariablePointers.fromList(directionVars),
+      lambdaVars    = VariablePointers.fromList(composition.lambdaVars),
+      directionVars = VariablePointers.fromList(composition.directionVars),
       comps         = listArray(flat.comps)
     );
 
     if Flags.isSet(Flags.JAC_DUMP) then
       printGeneration(newName, hessianValue);
     end if;
-  end fromProgram;
-
-  function getHessianSeeds
-    input NBProgram.Program program;
-    output list<Pointer<Variable>> lambdaVars;
-    output list<Pointer<Variable>> directionVars;
-  protected
-    NBProgram.Program sourceProgram;
-  algorithm
-    lambdaVars := match program.source
-      case SOME(sourceProgram) guard(sourceProgram.kind == NBProgram.Kind.ADJOINT) then sourceProgram.seedVars;
-      else {};
-    end match;
-
-    directionVars := getDirectionSeeds(program.dependencies);
-  end getHessianSeeds;
+  end fromComposition;
 
   function getDirectionSeeds
     input list<NBProgram.Program> dependencies;
@@ -215,14 +211,14 @@ public
     Pointer<Integer> idx = Pointer.create(0);
     BVariable.checkVar rowFilter = BJacobian.getTmpFilterFunction(jacType);
     list<Pointer<Variable>> functionVars, innerVars;
-    NBProgram.Program program;
+    Composition composition;
   algorithm
     _ := equations;
     _ := full;
 
     (functionVars, innerVars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), rowFilter);
 
-    program := createForwardOverReverse(
+    composition := createForwardOverReverse(
       newName,
       seedCandidates,
       VariablePointers.fromList(functionVars, partialCandidates.scalarized),
@@ -233,10 +229,10 @@ public
       idx
     );
 
-    hessian := SOME(fromProgram(
+    hessian := SOME(fromComposition(
       newName,
       jacType,
-      program
+      composition
     ));
   end symbolicForwardOverReverse;
 
@@ -263,12 +259,12 @@ public
   protected
     String newName = name;
     Pointer<Integer> idx = Pointer.create(0);
-    NBProgram.Program program;
+    Composition composition;
   algorithm
     _ := equations;
     _ := full;
 
-    program := createForwardOverReverse(
+    composition := createForwardOverReverse(
       newName,
       differentiationVars,
       functionVars,
@@ -279,16 +275,17 @@ public
       idx
     );
 
-    hessian := SOME(fromProgram(
+    hessian := SOME(fromComposition(
       newName,
       jacType,
-      program
+      composition
     ));
   end forFunctionVariables;
 
 protected
   function createForwardOverReverse
-    "Create forward(reverse(primal)) for lambda^T * functionVars(differentiationVars)."
+    "Create forward(reverse(primal)) for lambda^T * functionVars(differentiationVars).
+     Returns the final HVP program together with explicit lambda/v seed vars."
     input String name;
     input VariablePointers differentiationVars;
     input VariablePointers functionVars;
@@ -297,10 +294,11 @@ protected
     input UnorderedMap<Path, Function> funcMap;
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
-    output NBProgram.Program program;
+    output Composition composition;
   protected
     NBProgram.Program primalProgram;
     NBProgram.Program adjointProgram;
+    NBProgram.Program program;
   algorithm
     primalProgram := NBProgram.fromStrongComponents(
       name,
@@ -311,15 +309,25 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBProgram.Allocation.FRESH
+      NBProgram.defaultOptions(name, NBProgram.Allocation.FRESH)
     );
 
     adjointProgram := NBAdjoint.create(primalProgram);
-    adjointProgram := NBProgram.setNames(
+    adjointProgram := NBProgram.withOptions(
       adjointProgram,
-      NBProgram.names(name + "_V", "HVP_" + name, "FOR_" + name, cleanup = true)
+      NBProgram.options(
+        NBProgram.Allocation.FRESH,
+        name + "_V",
+        "HVP_" + name,
+        "FOR_" + name,
+        cleanupAlgorithms = true)
     );
     program := NBForward.create(adjointProgram);
+    composition := Composition.COMPOSITION(
+      program       = program,
+      lambdaVars   = adjointProgram.seedVars,
+      directionVars = getDirectionSeeds(program.dependencies)
+    );
   end createForwardOverReverse;
 
   annotation(__OpenModelica_Interface="nbackend");

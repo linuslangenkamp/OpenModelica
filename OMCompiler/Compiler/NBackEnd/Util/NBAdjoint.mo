@@ -41,7 +41,6 @@ encapsulated package NBAdjoint
 
 public
   import NBEquation;
-  import NBForward;
   import NBProgram;
   import NBVariable;
 
@@ -68,7 +67,6 @@ protected
   import BEquation = NBEquation;
   import BVariable = NBVariable;
   import Differentiate = NBDifferentiate;
-  import Forward = NBForward;
   import NBDifferentiate.DifferentiationType;
   import NBEquation.Equation;
   import Replacements = NBReplacements;
@@ -88,22 +86,24 @@ protected
 
 public
   function create
-    "Create a symbolic adjoint program for lambda^T * F(x)."
+    "Create a symbolic adjoint program for lambda^T * F(x).
+     The returned program can be differentiated again by NBForward.create."
     input NBProgram.Program program;
     output NBProgram.Program adjointProgram;
   protected
-    list<StrongComponent> comps, primalComps, diffed_comps = {};
+    list<StrongComponent> comps, diffed_comps = {};
     UnorderedMap<ComponentRef, ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
 
     list<Pointer<Variable>> res_vars, tmp_vars, seed_vars, row_vars, base_tmp_vars, baseTmpVarCandidates;
     list<StrongComponent> compAdjComps;
     list<Pointer<Variable>> compNewVars;
     String seedName;
+    NBProgram.Allocation allocation;
     VariablePointers differentiationVars;
   algorithm
     comps := program.comps;
-    primalComps := program.primalComps;
     differentiationVars := VariablePointers.fromList(program.domainVars, program.scalarized);
+    NBProgram.Options.OPTIONS(allocation = allocation) := program.options;
 
     for c in comps loop
       if not supportsStrongComponent(c) then
@@ -123,11 +123,11 @@ public
       print("Inner variables before pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(program.innerVars, program.scalarized), "Inner Variables") + "\n");
     end if;
 
-    (diff_map, res_vars) := Forward.mapVariables(
+    (diff_map, res_vars) := NBProgram.mapVariables(
       program.domainVars,
       program.name,
-      NBForward.VariableRole.ADJOINT_RESULT,
-      program.allocation,
+      NBProgram.VariableRole.ADJOINT_RESULT,
+      program.options,
       program.staticAsContinuous,
       program.idx,
       diff_map
@@ -136,12 +136,12 @@ public
     row_vars := program.rangeVars;
     (base_tmp_vars, _) := List.splitOnTrue(program.innerVars, function BVariable.isContinuous(staticAsContinuous = program.staticAsContinuous));
 
-    seedName := if program.allocation == NBProgram.Allocation.FRESH then program.name + "_LAMBDA" else program.name;
-    (diff_map, seed_vars) := Forward.mapVariables(
+    seedName := if allocation == NBProgram.Allocation.FRESH then program.name + "_LAMBDA" else program.name;
+    (diff_map, seed_vars) := NBProgram.mapVariables(
       row_vars,
       seedName,
-      NBForward.VariableRole.SEED,
-      program.allocation,
+      NBProgram.VariableRole.SEED,
+      program.options,
       program.staticAsContinuous,
       program.idx,
       diff_map
@@ -153,11 +153,11 @@ public
       print("tmp vars before pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(base_tmp_vars), "Tmp Base Vars") + "\n");
     end if;
 
-    (diff_map, tmp_vars) := Forward.mapVariables(
+    (diff_map, tmp_vars) := NBProgram.mapVariables(
       base_tmp_vars,
       program.name,
-      NBForward.VariableRole.ADJOINT_TMP,
-      program.allocation,
+      NBProgram.VariableRole.ADJOINT_TMP,
+      program.options,
       program.staticAsContinuous,
       program.idx,
       diff_map
@@ -195,31 +195,23 @@ public
       end for;
     end if;
 
-    adjointProgram := NBProgram.make(
-      name           = program.name,
-      kind           = NBProgram.Kind.ADJOINT,
-      level          = program.level + 1,
-      source         = SOME(program),
-      dependencies   = {},
-      sourceVars     = listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)),
-      diffMap        = diff_map,
-      primalComps    = primalComps,
-      comps          = diffed_comps,
-      scalarized     = program.scalarized,
-      domainVars     = program.domainVars,
-      rangeVars      = res_vars,
-      innerVars      = tmp_vars,
-      seedVars       = seed_vars,
-      resultVars     = res_vars,
-      tmpVars        = tmp_vars,
-      seedBaseVars   = row_vars,
-      resultBaseVars = program.domainVars,
-      tmpBaseVars    = baseTmpVarCandidates,
-      funcMap        = program.funcMap,
-      staticAsContinuous = program.staticAsContinuous,
-      idx            = program.idx,
-      allocation     = program.allocation,
-      names          = program.names
+    adjointProgram := NBProgram.fromTransform(
+      sourceProgram = program,
+      kind          = NBProgram.Kind.ADJOINT,
+      dependencies  = {},
+      sourceVars    = listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)),
+      diffMap       = diff_map,
+      comps         = diffed_comps,
+      vars          = NBProgram.variableSets(
+        domainVars     = program.domainVars,
+        rangeVars      = res_vars,
+        innerVars      = tmp_vars,
+        seedVars       = seed_vars,
+        resultVars     = res_vars,
+        tmpVars        = tmp_vars,
+        seedBaseVars   = row_vars,
+        resultBaseVars = program.domainVars,
+        tmpBaseVars    = baseTmpVarCandidates)
     );
   end create;
 

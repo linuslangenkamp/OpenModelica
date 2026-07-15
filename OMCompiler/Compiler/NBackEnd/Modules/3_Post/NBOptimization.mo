@@ -299,7 +299,8 @@ protected
   end createJacobian;
 
   function createHessian
-    "Create an ODE HVP program for lambda^T * functionVars in direction v."
+    "Create an ODE HVP program for lambda^T * functionVars in direction v.
+     DAE residual Hessians are intentionally left for a later interface."
     input String hessianName;
     input JacobianType jacType;
     input VariablePointers functionVars;
@@ -399,7 +400,8 @@ protected
   end hessianToBackend;
 
   function hessianSparsity
-    "Create the lower triangular Hessian pattern from the generated HVP program itself."
+    "Create lower-triangular Hessian sparsity from the generated HVP program.
+     Falls back to dense lower storage when loop dependencies are opaque."
     input Hessian.Hessian hessian;
     input JacobianType jacType;
     input Boolean staticAsContinuous;

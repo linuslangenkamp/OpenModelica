@@ -110,19 +110,21 @@ constant JacobianMatrix emptyJacobian = JAC_MATRIX({}, {}, "", {}, {}, {}, {}, {
 constant PartitionData emptyPartitionData = PARTITIONDATA(-1,{},{},{});
 
 uniontype HessianMatrix
+  "SimCode representation of one generated Hessian callback.
+   Templates use this to emit _19moo.c/.h entries and metadata."
   record HESSIAN_MATRIX
-    String name                                      "unique HVP name";
-    list<SimEqSystem> equations                     "HVP equations";
-    list<SimCodeVar.SimVar> lambdaVars              "reverse seed vector lambda";
-    list<SimCodeVar.SimVar> directionVars           "forward direction vector v";
-    list<SimCodeVar.SimVar> resultVars              "HVP result vector h";
-    list<SimCodeVar.SimVar> tmpVars                 "temporary HVP variables";
-    SparsityPattern lowerSparsity                   "lower triangular Hessian sparsity in CSC form";
-    list<SimGenericCall> generic_loop_calls;
-    Option<HashTableCrefSimVar.HashTable> lambdaHT;
-    Option<HashTableCrefSimVar.HashTable> directionHT;
-    Option<HashTableCrefSimVar.HashTable> resultHT;
-    Option<HashTableCrefSimVar.HashTable> tmpHT;
+    String                                  name               "unique HVP name";
+    list<SimEqSystem>                       equations          "HVP equations";
+    list<SimCodeVar.SimVar>                 lambdaVars         "reverse seed vector lambda";
+    list<SimCodeVar.SimVar>                 directionVars      "forward direction vector v";
+    list<SimCodeVar.SimVar>                 resultVars         "HVP result vector h";
+    list<SimCodeVar.SimVar>                 tmpVars            "temporary HVP variables";
+    SparsityPattern                         lowerSparsity      "lower triangular Hessian sparsity in CSC form";
+    list<SimGenericCall>                    generic_loop_calls "generic loop calls used by HVP equations";
+    Option<HashTableCrefSimVar.HashTable>   lambdaHT           "cref lookup for lambdaVars";
+    Option<HashTableCrefSimVar.HashTable>   directionHT        "cref lookup for directionVars";
+    Option<HashTableCrefSimVar.HashTable>   resultHT           "cref lookup for resultVars";
+    Option<HashTableCrefSimVar.HashTable>   tmpHT              "cref lookup for tmpVars";
   end HESSIAN_MATRIX;
 end HessianMatrix;
 

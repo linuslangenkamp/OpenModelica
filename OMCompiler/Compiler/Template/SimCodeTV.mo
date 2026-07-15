@@ -473,19 +473,21 @@ package SimCode
   end JacobianMatrix;
 
   uniontype HessianMatrix
+    "Template-visible representation of one generated Hessian callback.
+     Mirrors SimCode.HessianMatrix for _19moo.c/.h generation."
     record HESSIAN_MATRIX
-      String name;
-      list<SimEqSystem> equations;
-      list<SimCodeVar.SimVar> lambdaVars;
-      list<SimCodeVar.SimVar> directionVars;
-      list<SimCodeVar.SimVar> resultVars;
-      list<SimCodeVar.SimVar> tmpVars;
-      SparsityPattern lowerSparsity;
-      list<SimGenericCall> generic_loop_calls;
-      Option<HashTableCrefSimVar.HashTable> lambdaHT;
-      Option<HashTableCrefSimVar.HashTable> directionHT;
-      Option<HashTableCrefSimVar.HashTable> resultHT;
-      Option<HashTableCrefSimVar.HashTable> tmpHT;
+      String                                name               "unique HVP name";
+      list<SimEqSystem>                     equations          "HVP equations";
+      list<SimCodeVar.SimVar>               lambdaVars         "reverse seed vector lambda";
+      list<SimCodeVar.SimVar>               directionVars      "forward direction vector v";
+      list<SimCodeVar.SimVar>               resultVars         "HVP result vector h";
+      list<SimCodeVar.SimVar>               tmpVars            "temporary HVP variables";
+      SparsityPattern                       lowerSparsity      "lower triangular Hessian sparsity";
+      list<SimGenericCall>                  generic_loop_calls "generic loop calls used by HVP equations";
+      Option<HashTableCrefSimVar.HashTable> lambdaHT           "cref lookup for lambdaVars";
+      Option<HashTableCrefSimVar.HashTable> directionHT        "cref lookup for directionVars";
+      Option<HashTableCrefSimVar.HashTable> resultHT           "cref lookup for resultVars";
+      Option<HashTableCrefSimVar.HashTable> tmpHT              "cref lookup for tmpVars";
     end HESSIAN_MATRIX;
   end HessianMatrix;
 
@@ -1258,11 +1260,13 @@ package SimCodeFunction
       Option<HashTableCrefSimVar.HashTable> jacHT;
     end JACOBIAN_CONTEXT;
     record HESSIAN_CONTEXT
-      String name;
-      Option<HashTableCrefSimVar.HashTable> lambdaHT;
-      Option<HashTableCrefSimVar.HashTable> directionHT;
-      Option<HashTableCrefSimVar.HashTable> resultHT;
-      Option<HashTableCrefSimVar.HashTable> tmpHT;
+      "Template context for generated Hessian equations.
+       Maps crefs to HESSIAN lambda/direction/result/tmp arrays."
+      String                                name        "unique HVP name";
+      Option<HashTableCrefSimVar.HashTable> lambdaHT    "cref lookup for lambdaVars";
+      Option<HashTableCrefSimVar.HashTable> directionHT "cref lookup for directionVars";
+      Option<HashTableCrefSimVar.HashTable> resultHT    "cref lookup for resultVars";
+      Option<HashTableCrefSimVar.HashTable> tmpHT       "cref lookup for tmpVars";
     end HESSIAN_CONTEXT;
     record ALGLOOP_CONTEXT
       Boolean genInitialisation;

@@ -339,11 +339,13 @@ public uniontype Context
   end JACOBIAN_CONTEXT;
 
   record HESSIAN_CONTEXT
-    String name;
-    Option<HashTableCrefSimVar.HashTable> lambdaHT;
-    Option<HashTableCrefSimVar.HashTable> directionHT;
-    Option<HashTableCrefSimVar.HashTable> resultHT;
-    Option<HashTableCrefSimVar.HashTable> tmpHT;
+    "Template context for generated Hessian equations.
+     Maps crefs to HESSIAN lambda/direction/result/tmp arrays."
+    String                                 name        "unique HVP name";
+    Option<HashTableCrefSimVar.HashTable> lambdaHT    "cref lookup for lambdaVars";
+    Option<HashTableCrefSimVar.HashTable> directionHT "cref lookup for directionVars";
+    Option<HashTableCrefSimVar.HashTable> resultHT    "cref lookup for resultVars";
+    Option<HashTableCrefSimVar.HashTable> tmpHT       "cref lookup for tmpVars";
   end HESSIAN_CONTEXT;
 
   record OTHER_CONTEXT

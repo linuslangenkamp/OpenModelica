@@ -1293,7 +1293,6 @@ protected
   protected
     Pointer<Integer> idx = Pointer.create(0);
 
-    list<Pointer<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, tmp_vars, seed_vars;
     BVariable.VarData varDataJac;
     SparsityPattern sparsityPattern;
     SparsityColoring sparsityColoring;
@@ -1314,32 +1313,12 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBProgram.Allocation.REUSE
+      NBProgram.defaultOptions(name, NBProgram.Allocation.REUSE)
     );
     program := NBForward.create(primalProgram);
     flat := NBProgram.flatten(program);
 
-    // collect var data (most of this can be removed)
-    res_vars      := flat.resultVars;
-    tmp_vars      := flat.tmpVars;
-    seed_vars     := flat.seedVars;
-    unknown_vars  := flat.unknowns;
-    all_vars      := flat.variables;
-    aux_vars      := flat.auxiliaries;
-    alias_vars    := {};
-    depend_vars   := {};
-
-    varDataJac := BVariable.VAR_DATA_JAC(
-      variables     = VariablePointers.fromList(all_vars),
-      unknowns      = VariablePointers.fromList(unknown_vars),
-      auxiliaries   = VariablePointers.fromList(aux_vars),
-      aliasVars     = VariablePointers.fromList(alias_vars),
-      diffVars      = partialCandidates,
-      dependencies  = VariablePointers.fromList(depend_vars),
-      resultVars    = VariablePointers.fromList(res_vars),
-      tmpVars       = VariablePointers.fromList(tmp_vars),
-      seedVars      = VariablePointers.fromList(seed_vars)
-    );
+    varDataJac := varDataFromFlat(flat, partialCandidates);
 
     (sparsityPattern, sparsityColoring) := SparsityPattern.create(seedCandidates, partialCandidates, strongComponents, jacType, staticAsContinuous);
 
@@ -1356,11 +1335,28 @@ protected
   end jacobianSymbolic;
 
 protected
+  function varDataFromFlat
+    input NBProgram.Flat flat;
+    input VariablePointers diffVars;
+    output BVariable.VarData varData;
+  algorithm
+    varData := BVariable.VAR_DATA_JAC(
+      variables     = VariablePointers.fromList(flat.variables),
+      unknowns      = VariablePointers.fromList(flat.unknowns),
+      auxiliaries   = VariablePointers.fromList(flat.auxiliaries),
+      aliasVars     = VariablePointers.fromList({}),
+      diffVars      = diffVars,
+      dependencies  = VariablePointers.fromList({}),
+      resultVars    = VariablePointers.fromList(flat.resultVars),
+      tmpVars       = VariablePointers.fromList(flat.tmpVars),
+      seedVars      = VariablePointers.fromList(flat.seedVars)
+    );
+  end varDataFromFlat;
+
   function jacobianSymbolicAdjoint extends Module.jacobianInterface;
   protected
     Pointer<Integer> idx = Pointer.create(0);
 
-    list<Pointer<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, tmp_vars, seed_vars;
     BVariable.VarData varDataJac;
     SparsityPattern sparsityPattern;
     SparsityColoring sparsityColoring;
@@ -1383,32 +1379,12 @@ protected
       funcMap,
       staticAsContinuous,
       idx,
-      NBProgram.Allocation.REUSE
+      NBProgram.defaultOptions(newName, NBProgram.Allocation.REUSE)
     );
     program := NBAdjoint.create(primalProgram);
     flat := NBProgram.flatten(program);
 
-    // collect var data (most of this can be removed)
-    res_vars      := flat.resultVars;
-    tmp_vars      := flat.tmpVars;
-    seed_vars     := flat.seedVars;
-    unknown_vars  := flat.unknowns;
-    all_vars      := flat.variables;
-    aux_vars      := flat.auxiliaries;
-    alias_vars    := {};
-    depend_vars   := {};
-
-    varDataJac := BVariable.VAR_DATA_JAC(
-      variables     = VariablePointers.fromList(all_vars),
-      unknowns      = VariablePointers.fromList(unknown_vars),
-      auxiliaries   = VariablePointers.fromList(aux_vars),
-      aliasVars     = VariablePointers.fromList(alias_vars),
-      diffVars      = partialCandidates,
-      dependencies  = VariablePointers.fromList(depend_vars),
-      resultVars    = VariablePointers.fromList(res_vars),
-      tmpVars       = VariablePointers.fromList(tmp_vars),
-      seedVars      = VariablePointers.fromList(seed_vars)
-    );
+    varDataJac := varDataFromFlat(flat, partialCandidates);
 
     (sparsityPattern, sparsityColoring) := SparsityPattern.create(seedCandidates, partialCandidates, strongComponents, jacType, staticAsContinuous);
 

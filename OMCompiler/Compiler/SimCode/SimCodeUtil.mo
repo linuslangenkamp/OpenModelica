@@ -15257,6 +15257,8 @@ algorithm
 end createJacContext;
 
 public function createHessianContext
+  "Create template context for Hessian code generation.
+   The hash tables route crefs to HESSIAN seed/result/tmp arrays."
   input String name;
   input Option<HashTableCrefSimVar.HashTable> lambdaHT;
   input Option<HashTableCrefSimVar.HashTable> directionHT;

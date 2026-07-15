@@ -165,16 +165,18 @@ public
   end JACOBIAN;
 
   record HESSIAN
-    VarData varData                   "Variable data";
-    EqData eqData                     "Equation data";
-    String name                       "unique HVP name";
-    JacobianType jacType              "corresponding function block type";
-    VariablePointers lambdaVars       "fixed reverse seed lambda";
-    VariablePointers directionVars    "forward direction seed v";
-    VariablePointers resultVars       "HVP result variables h";
-    VariablePointers tmpVars          "all internal tangent / adjoint / forward-over-reverse variables";
-    SparsityPattern sparsityPattern   "lower triangular Hessian sparsity pattern";
-    array<StrongComponent> comps      "sorted HVP equations";
+    "Backend container for one generated Hessian-vector product.
+     Stores seeds, HVP equations and lower-triangular export sparsity."
+    VarData                varData         "Variable data";
+    EqData                 eqData          "Equation data";
+    String                 name            "unique HVP name";
+    JacobianType           jacType         "corresponding function block type";
+    VariablePointers       lambdaVars      "fixed reverse seed lambda";
+    VariablePointers       directionVars   "forward direction seed v";
+    VariablePointers       resultVars      "HVP result variables h";
+    VariablePointers       tmpVars         "all internal tangent / adjoint / forward-over-reverse variables";
+    SparsityPattern        sparsityPattern "lower triangular Hessian sparsity pattern";
+    array<StrongComponent> comps           "sorted HVP equations";
   end HESSIAN;
 
   function toString
