@@ -92,6 +92,7 @@ public
     BackendDAE.OptimizationFormulation formulation;
     list<Partition.Partition> parts;
     Option<list<Partition.Partition>> daeParts;
+    Pointer<Integer> optIndex = Pointer.create(1);
   algorithm
     if not enabled() then
       return;
@@ -107,15 +108,15 @@ public
           if kind == NBPartition.Kind.DAE and isSome(bdae.dae) then
             formulation := BackendDAE.OptimizationFormulation.DAE;
             daeParts := bdae.dae;
-            (daeParts, optParts) := applyToOptionalPartitions(daeParts, knowns, "DAE_OPT", formulation, func, bdae.funcMap);
+            (daeParts, optParts) := applyToOptionalPartitions(daeParts, knowns, formulation, func, bdae.funcMap, optIndex);
             bdae.dae := daeParts;
           else
             formulation := BackendDAE.OptimizationFormulation.ODE;
             parts := bdae.ode;
-            (parts, optParts) := applyToPartitions(parts, knowns, "ODE_OPT", formulation, func, bdae.funcMap);
+            (parts, optParts) := applyToPartitions(parts, knowns, formulation, func, bdae.funcMap, optIndex);
             bdae.ode := parts;
             parts := bdae.ode_event;
-            (parts, eventOptParts) := applyToPartitions(parts, knowns, "ODE_OPT", formulation, func, bdae.funcMap);
+            (parts, eventOptParts) := applyToPartitions(parts, knowns, formulation, func, bdae.funcMap, optIndex);
             bdae.ode_event := parts;
             for optPart in listReverse(optParts) loop
               eventOptParts := optPart :: eventOptParts;
@@ -144,17 +145,17 @@ protected
   function applyToOptionalPartitions
     input output Option<list<Partition.Partition>> partitions;
     input VariablePointers knowns;
-    input String name;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
+    input Pointer<Integer> optIndex;
     output list<BackendDAE> optParts = {};
   protected
     list<Partition.Partition> parts;
   algorithm
     if isSome(partitions) then
       parts := Util.getOption(partitions);
-      (parts, optParts) := applyToPartitions(parts, knowns, name, formulation, func, funcMap);
+      (parts, optParts) := applyToPartitions(parts, knowns, formulation, func, funcMap, optIndex);
       partitions := SOME(parts);
     end if;
   end applyToOptionalPartitions;
@@ -162,10 +163,10 @@ protected
   function applyToPartitions
     input output list<Partition.Partition> partitions;
     input VariablePointers knowns;
-    input String name;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
+    input Pointer<Integer> optIndex;
     output list<BackendDAE> optParts = {};
   protected
     Partition.Partition part;
@@ -173,7 +174,7 @@ protected
     list<Partition.Partition> newParts = {};
   algorithm
     for p in partitions loop
-      (part, optPart) := partOptimization(p, knowns, name, formulation, func, funcMap);
+      (part, optPart) := partOptimization(p, knowns, formulation, func, funcMap, optIndex);
       newParts := part :: newParts;
       if isSome(optPart) then
         optParts := Util.getOption(optPart) :: optParts;
@@ -187,16 +188,17 @@ protected
   function partOptimization
     input output Partition.Partition part;
     input VariablePointers allKnowns;
-    input String name;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
+    input Pointer<Integer> optIndex;
     output Option<BackendDAE> optPart = NONE();
   protected
     constant Boolean staticAsContinuous = true;
     VariablePointers differentiationVars, lfgFunctionVars, mrfFunctionVars, r0FunctionVars, innerVars;
     Option<Jacobian> lfgJacobian, mrfJacobian, r0Jacobian;
     Option<Jacobian> lfgHessian, mrfHessian, r0Hessian;
+    String suffix, name, lfgName, mrfName, r0Name;
   algorithm
     if not Partition.Partition.isODEorDAE(part) then
       return;
@@ -207,29 +209,35 @@ protected
     mrfFunctionVars := VariablePointers.fromList(getMrfFunctionVars(part), part.unknowns.scalarized);
     r0FunctionVars  := VariablePointers.fromList(getR0FunctionVars(part),  part.unknowns.scalarized);
     innerVars := getInnerVars(part, differentiationVars, lfgFunctionVars, mrfFunctionVars, r0FunctionVars);
+    suffix := intString(Pointer.access(optIndex));
+    Pointer.update(optIndex, Pointer.access(optIndex) + 1);
+    name := "OPT_" + suffix;
+    lfgName := "OPT_LFG_" + suffix;
+    mrfName := "OPT_MRF_" + suffix;
+    r0Name  := "OPT_R0_" + suffix;
 
     lfgJacobian := createJacobian(
-      name, JacobianType.OPT_LFG, lfgFunctionVars, differentiationVars,
+      lfgName, JacobianType.OPT_LFG, lfgFunctionVars, differentiationVars,
       BVariable.isLfgVariable, part, func, funcMap, staticAsContinuous);
 
     mrfJacobian := createJacobian(
-      name, JacobianType.OPT_MRF, mrfFunctionVars, differentiationVars,
+      mrfName, JacobianType.OPT_MRF, mrfFunctionVars, differentiationVars,
       BVariable.isMrfVariable, part, func, funcMap, staticAsContinuous);
 
     r0Jacobian := createJacobian(
-      name, JacobianType.OPT_R0, r0FunctionVars, differentiationVars,
+      r0Name, JacobianType.OPT_R0, r0FunctionVars, differentiationVars,
       BVariable.isR0Variable, part, func, funcMap, staticAsContinuous);
 
     lfgHessian := createHessian(
-      "OPT_LFG", JacobianType.OPT_LFG, lfgFunctionVars, differentiationVars,
+      lfgName, JacobianType.OPT_LFG, lfgFunctionVars, differentiationVars,
       BVariable.isLfgVariable, part, funcMap, formulation, staticAsContinuous);
 
     mrfHessian := createHessian(
-      "OPT_MRF", JacobianType.OPT_MRF, mrfFunctionVars, differentiationVars,
+      mrfName, JacobianType.OPT_MRF, mrfFunctionVars, differentiationVars,
       BVariable.isMrfVariable, part, funcMap, formulation, staticAsContinuous);
 
     r0Hessian := createHessian(
-      "OPT_R0", JacobianType.OPT_R0, r0FunctionVars, differentiationVars,
+      r0Name, JacobianType.OPT_R0, r0FunctionVars, differentiationVars,
       BVariable.isR0Variable, part, funcMap, formulation, staticAsContinuous);
 
     part := setOptimizationJacobians(part, lfgJacobian, mrfJacobian, r0Jacobian);
@@ -413,6 +421,11 @@ protected
       listAppend(VariablePointers.toList(hessian.resultVars), VariablePointers.toList(hessian.tmpVars)),
       hessian.variables.scalarized);
 
+    if hasAlgebraicLoop(hessian.comps) then
+      lowerSparsity := denseLowerHessianSparsity(hessian.directionVars, hessian.resultVars);
+      return;
+    end if;
+
     lowerSparsity := BJacobian.SparsityPattern.createForRows(
       seedCandidates      = hessian.directionVars,
       partialCandidates   = partialCandidates,
@@ -427,6 +440,32 @@ protected
       lowerSparsity := denseLowerHessianSparsity(hessian.directionVars, hessian.resultVars);
     end if;
   end hessianSparsity;
+
+  function hasAlgebraicLoop
+    "Conservative marker for HVP sparsity. Loop-solve dependencies are not yet
+     resolved strongly enough to export a structural lower pattern safely."
+    input array<StrongComponent> comps;
+    output Boolean found = false;
+  algorithm
+    for i in 1:arrayLength(comps) loop
+      if componentHasAlgebraicLoop(comps[i]) then
+        found := true;
+        return;
+      end if;
+    end for;
+  end hasAlgebraicLoop;
+
+  function componentHasAlgebraicLoop
+    input StrongComponent comp;
+    output Boolean found;
+  algorithm
+    found := match comp
+      case StrongComponent.ALGEBRAIC_LOOP() then true;
+      case StrongComponent.ENTWINED_COMPONENT() then List.any(comp.entwined_slices, componentHasAlgebraicLoop);
+      case StrongComponent.ALIAS() then componentHasAlgebraicLoop(comp.original);
+      else false;
+    end match;
+  end componentHasAlgebraicLoop;
 
   function lowerTriangularHessianSparsity
     "Restrict an HVP dependency pattern to the lower triangular Hessian storage.
@@ -617,7 +656,7 @@ protected
         pathVars := var :: pathVars;
       end if;
     end for;
-    vars := listReverse(listAppend(lagrangeVars, listAppend(derivativeVars, pathVars)));
+    vars := listAppend(listReverse(lagrangeVars), listAppend(listReverse(derivativeVars), listReverse(pathVars)));
   end getLfgFunctionVars;
 
   function getMrfFunctionVars
@@ -633,7 +672,7 @@ protected
         finalVars := var :: finalVars;
       end if;
     end for;
-    vars := listReverse(listAppend(mayerVars, finalVars));
+    vars := listAppend(listReverse(mayerVars), listReverse(finalVars));
   end getMrfFunctionVars;
 
   function getR0FunctionVars

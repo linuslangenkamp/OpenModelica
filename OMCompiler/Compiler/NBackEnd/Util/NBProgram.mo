@@ -36,7 +36,7 @@
 encapsulated package NBProgram
 "file:        NBProgram.mo
  package:     NBProgram
- description: Shared staged backend program representation for symbolic AD.
+ description: Shared staged backend program representation for symbolic differentiation.
 "
 
 public
@@ -61,6 +61,7 @@ protected
   // Util imports
   import Error;
   import UnorderedMap;
+  import UnorderedSet;
   import Util;
 
 public
@@ -91,16 +92,17 @@ public
       String     tmpPrefix         "Prefix/name context for derivative temporary variables";
       Boolean    cleanupAlgorithms "Drop non-derivative assignments from differentiated algorithms";
       String     debugOrigin       "Optional diagnostic origin passed to the low-level differentiator";
+      Boolean    fixedNames        "Use the prefixes exactly instead of deriving a fresh derivative stage name";
     end OPTIONS;
   end Options;
 
   uniontype VariableSets
-    "Variables introduced by one AD transformation.
+    "Variables introduced by one differentiation transformation.
 
      domain/range/inner describe the mathematical program represented by the
      new stage. seed/result/tmp are the variables introduced by this stage.
-     The *BaseVars lists remember the source variables used for naming those
-     introduced variables, which is needed for readable nested derivatives."
+     resultBaseVars remembers the source variables used for naming resultVars,
+     which keeps readable names for nested derivatives."
     record VARIABLE_SETS
       list<Pointer<Variable>> domainVars     "Mathematical input variables of the transformed program";
       list<Pointer<Variable>> rangeVars      "Mathematical output variables of the transformed program";
@@ -108,25 +110,25 @@ public
       list<Pointer<Variable>> seedVars       "Seed variables introduced by this transformation";
       list<Pointer<Variable>> resultVars     "Result variables introduced by this transformation";
       list<Pointer<Variable>> tmpVars        "Temporary variables introduced by this transformation";
-      list<Pointer<Variable>> seedBaseVars   "Source variables used to create seedVars";
       list<Pointer<Variable>> resultBaseVars "Source variables used to name resultVars";
-      list<Pointer<Variable>> tmpBaseVars    "Source variables used to create tmpVars";
     end VARIABLE_SETS;
   end VariableSets;
 
   uniontype Program
-    "Staged backend program used by symbolic AD.
+    "Staged backend program used by symbolic program differentiation.
 
-     domainVars are the mathematical input variables of the represented
-     program. rangeVars are the represented outputs. innerVars are continuous
-     backend variables that are needed while evaluating the program but are
-     not part of the mathematical range.
+     domainVars are the active mathematical inputs of the represented
+     program: forward and adjoint transformations differentiate with respect
+     to these variables. rangeVars are the represented outputs. innerVars are
+     continuous backend variables that are needed while evaluating the program
+     but are not part of the mathematical range.
 
      seedVars, resultVars and tmpVars are variables introduced by the current
-     AD stage. The corresponding *BaseVars lists remember which source
-     variables were named by those AD variables; this lets a later stage name
-     forward-over-reverse results after the original variables instead of the
-     intermediate adjoints.
+     derivative stage. Stage seeds are fixed inputs for later transformations;
+     since they are not domainVars, differentiating them gives zero.
+     resultBaseVars remembers which source variables named the stage results;
+     this lets a later stage name forward-over-reverse results after the
+     original variables instead of the intermediate adjoints.
 
      sourceVars lists variables from source whose tangents must be available
      when this program is differentiated again. dependencies are staged
@@ -140,7 +142,6 @@ public
       list<Pointer<Variable>> sourceVars   "Source variables whose tangents are required when differentiating this stage again";
 
       UnorderedMap<ComponentRef, ComponentRef> diffMap     "Map from source component references to derivative component references";
-      list<StrongComponent>                    primalComps "Original primal strong components for this staged computation";
       list<StrongComponent>                    comps       "Strong components that evaluate this stage";
       Boolean                                  scalarized  "Whether the variable pointer sets use scalarized component references";
 
@@ -152,9 +153,7 @@ public
       list<Pointer<Variable>> resultVars "Derivative result variables introduced by this stage";
       list<Pointer<Variable>> tmpVars    "Derivative temporary variables introduced by this stage";
 
-      list<Pointer<Variable>> seedBaseVars   "Source variables used to create seedVars";
       list<Pointer<Variable>> resultBaseVars "Source variables used to name resultVars";
-      list<Pointer<Variable>> tmpBaseVars    "Source variables used to create tmpVars";
 
       UnorderedMap<Path, Function> funcMap            "Known functions needed by differentiation";
       Boolean                      staticAsContinuous "Treat static variables as differentiable continuous variables";
@@ -181,7 +180,7 @@ public
      Uses the same name context for seeds, results and temporaries."
     input String name;
     input Allocation allocation = Allocation.FRESH;
-    output Options options = Options.OPTIONS(allocation, name, name, name, false, "");
+    output Options options = Options.OPTIONS(allocation, name, name, name, false, "", false);
   end defaultOptions;
 
   function options
@@ -193,8 +192,46 @@ public
     input String tmpPrefix;
     input Boolean cleanupAlgorithms = false;
     input String debugOrigin = "";
-    output Options outOptions = Options.OPTIONS(allocation, seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms, debugOrigin);
+    output Options outOptions = Options.OPTIONS(allocation, seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms, debugOrigin, true);
   end options;
+
+  function stageOptions
+    "Choose naming options for a new derivative stage.
+     Explicit options are preserved; default options derive a fresh stage name."
+    input Program program;
+    input Kind kind;
+    input String stageName = "";
+    output Options outOptions;
+  protected
+    Allocation allocation;
+    String seedPrefix, resultPrefix, tmpPrefix, debugOrigin, prefix;
+    Boolean cleanupAlgorithms, fixedNames;
+  algorithm
+    Options.OPTIONS(
+      allocation        = allocation,
+      seedPrefix        = seedPrefix,
+      resultPrefix      = resultPrefix,
+      tmpPrefix         = tmpPrefix,
+      cleanupAlgorithms = cleanupAlgorithms,
+      debugOrigin       = debugOrigin,
+      fixedNames        = fixedNames) := program.options;
+
+    if fixedNames and stageName == "" then
+      outOptions := program.options;
+      return;
+    end if;
+
+    prefix := if stageName <> "" then stageName else program.name + "_" + kindString(kind) + intString(program.level + 1);
+
+    outOptions := match kind
+      case Kind.FORWARD then
+        Options.OPTIONS(allocation, prefix + "_V", prefix, prefix, cleanupAlgorithms, debugOrigin, false);
+      case Kind.ADJOINT then
+        Options.OPTIONS(allocation, prefix, prefix, prefix, cleanupAlgorithms, debugOrigin, false);
+      else
+        Options.OPTIONS(allocation, prefix, prefix, prefix, cleanupAlgorithms, debugOrigin, false);
+    end match;
+  end stageOptions;
 
   function fromStrongComponents
     "Create the primal staged program from backend strong components.
@@ -227,7 +264,6 @@ public
       dependencies   = {},
       sourceVars     = {},
       diffMap        = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual),
-      primalComps    = comps,
       comps          = comps,
       scalarized     = domainVars.scalarized,
       domainVars     = VariablePointers.toList(domainVars),
@@ -236,9 +272,7 @@ public
       seedVars       = {},
       resultVars     = {},
       tmpVars        = {},
-      seedBaseVars   = {},
       resultBaseVars = {},
-      tmpBaseVars    = {},
       funcMap        = funcMap,
       staticAsContinuous = staticAsContinuous,
       idx            = idx,
@@ -264,12 +298,10 @@ public
     input list<Pointer<Variable>> seedVars = {};
     input list<Pointer<Variable>> resultVars = {};
     input list<Pointer<Variable>> tmpVars = {};
-    input list<Pointer<Variable>> seedBaseVars = {};
     input list<Pointer<Variable>> resultBaseVars = {};
-    input list<Pointer<Variable>> tmpBaseVars = {};
     output VariableSets vars = VariableSets.VARIABLE_SETS(
       domainVars, rangeVars, innerVars, seedVars, resultVars, tmpVars,
-      seedBaseVars, resultBaseVars, tmpBaseVars);
+      resultBaseVars);
   end variableSets;
 
   function fromTransform
@@ -282,6 +314,7 @@ public
     input UnorderedMap<ComponentRef, ComponentRef> diffMap;
     input list<StrongComponent> comps;
     input VariableSets vars;
+    input Options options = sourceProgram.options;
     output Program program;
   algorithm
     () := match vars
@@ -294,7 +327,6 @@ public
           dependencies   = dependencies,
           sourceVars     = sourceVars,
           diffMap        = diffMap,
-          primalComps    = sourceProgram.primalComps,
           comps          = comps,
           scalarized     = sourceProgram.scalarized,
           domainVars     = vars.domainVars,
@@ -303,13 +335,11 @@ public
           seedVars       = vars.seedVars,
           resultVars     = vars.resultVars,
           tmpVars        = vars.tmpVars,
-          seedBaseVars   = vars.seedBaseVars,
           resultBaseVars = vars.resultBaseVars,
-          tmpBaseVars    = vars.tmpBaseVars,
           funcMap        = sourceProgram.funcMap,
           staticAsContinuous = sourceProgram.staticAsContinuous,
           idx            = sourceProgram.idx,
-          options        = sourceProgram.options
+          options        = options
         );
       then ();
     end match;
@@ -332,7 +362,6 @@ public
       dependencies   = {},
       sourceVars     = {},
       diffMap        = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual),
-      primalComps    = sourceProgram.primalComps,
       comps          = sourceProgram.comps,
       scalarized     = sourceProgram.scalarized,
       domainVars     = sourceProgram.domainVars,
@@ -341,9 +370,7 @@ public
       seedVars       = {},
       resultVars     = {},
       tmpVars        = {},
-      seedBaseVars   = {},
       resultBaseVars = {},
-      tmpBaseVars    = {},
       funcMap        = sourceProgram.funcMap,
       staticAsContinuous = sourceProgram.staticAsContinuous,
       idx            = sourceProgram.idx,
@@ -361,6 +388,8 @@ public
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
     input list<Pointer<Variable>> newVarsIn = {};
+    input Boolean force = false
+      "Map even passive/non-continuous variables when the caller needs a structural derivative cref.";
     output UnorderedMap<ComponentRef, ComponentRef> mapOut;
     output list<Pointer<Variable>> newVarsOut;
   protected
@@ -379,7 +408,8 @@ public
         options,
         staticAsContinuous,
         idx,
-        mapOut
+        mapOut,
+        force
       );
 
       if created and not ComponentRef.isEmpty(newCref) then
@@ -408,6 +438,52 @@ public
       fail();
     end if;
   end getNamingVars;
+
+  function uniqueVariables
+    "Remove duplicate variables by component reference while preserving order."
+    input list<Pointer<Variable>> vars;
+    output list<Pointer<Variable>> uniqueVars = {};
+  protected
+    UnorderedSet<ComponentRef> seen = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
+    ComponentRef cref;
+  algorithm
+    for var in vars loop
+      cref := BVariable.getVarName(var);
+      if not UnorderedSet.contains(cref, seen) then
+        UnorderedSet.add(cref, seen);
+        uniqueVars := var :: uniqueVars;
+      end if;
+    end for;
+
+    uniqueVars := listReverse(uniqueVars);
+  end uniqueVariables;
+
+  function lookupMappedVariables
+    "Return the derivative variables mapped for baseVars by diffMap."
+    input list<Pointer<Variable>> baseVars;
+    input UnorderedMap<ComponentRef, ComponentRef> diffMap;
+    output list<Pointer<Variable>> mappedVars = {};
+  protected
+    ComponentRef baseCref;
+    ComponentRef mappedCref;
+  algorithm
+    for baseVar in baseVars loop
+      baseCref := BVariable.getVarName(baseVar);
+      mappedCref := match UnorderedMap.get(baseCref, diffMap)
+        case SOME(mappedCref) then mappedCref;
+        else algorithm
+          Error.addMessage(Error.INTERNAL_ERROR, {
+            getInstanceName() + " failed because " + ComponentRef.toString(baseCref)
+            + " has no derivative mapping."
+          });
+        then fail();
+      end match;
+
+      mappedVars := BVariable.getVarPointer(mappedCref, sourceInfo()) :: mappedVars;
+    end for;
+
+    mappedVars := listReverse(mappedVars);
+  end lookupMappedVariables;
 
   function mapVariablesWithNaming
     "Map source variables while naming created variables from another list.
@@ -554,6 +630,7 @@ protected
     input Boolean staticAsContinuous;
     input Pointer<Integer> idx;
     input UnorderedMap<ComponentRef, ComponentRef> mapIn;
+    input Boolean force = false;
     output UnorderedMap<ComponentRef, ComponentRef> mapOut;
     output Pointer<Variable> newVar;
     output ComponentRef newCref;
@@ -571,7 +648,7 @@ protected
     newVar := baseVar;
     newCref := ComponentRef.EMPTY();
 
-    if not BVariable.isContinuous(baseVar, staticAsContinuous) then
+    if not force and not BVariable.isContinuous(baseVar, staticAsContinuous) then
       return;
     end if;
 
@@ -781,8 +858,17 @@ protected
     input Program program;
     output String id;
   algorithm
-    id := kindString(program.kind) + ":" + program.name + ":" + intString(program.level);
+    id := kindString(program.kind) + ":" + program.name + ":" + intString(program.level)
+      + ":" + variableNamesId(program.seedVars)
+      + "->" + variableNamesId(program.resultVars);
   end programId;
+
+  function variableNamesId
+    input list<Pointer<Variable>> vars;
+    output String id;
+  algorithm
+    id := stringDelimitList(list(ComponentRef.toString(BVariable.getVarName(var)) for var in vars), ",");
+  end variableNamesId;
 
   function kindString
     input Kind kind;

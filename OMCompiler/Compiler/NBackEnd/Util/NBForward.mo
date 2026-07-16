@@ -78,70 +78,90 @@ public
     "Forward differentiate a staged backend program.
      Dependencies required by nested derivatives are created automatically."
     input NBProgram.Program program;
+    input String stageName = "";
     output NBProgram.Program forwardProgram;
   algorithm
-    forwardProgram := createForward(program);
+    forwardProgram := createForward(program, stageName);
   end create;
 
 protected
   function createForward
     input NBProgram.Program program;
+    input String stageName;
     output NBProgram.Program forwardProgram;
   protected
-    list<Pointer<Variable>> seedBaseVars, resultSourceVars, resultBaseVars, tmpBaseVars;
+    list<Pointer<Variable>> seedSourceVars, resultSourceVars, resultBaseVars, tmpSourceVars, passiveSeedSourceVars;
+    list<Pointer<Variable>> sourceVars;
     list<Pointer<Variable>> resultVars = {}, tmpVars = {}, seedVars = {};
     UnorderedMap<ComponentRef, ComponentRef> diffMap;
     list<StrongComponent> diffedComps;
     list<NBProgram.Program> dependencies;
+    NBProgram.Options stageOptions;
     String seedPrefix, resultPrefix, tmpPrefix, contextName, debugOrigin;
     Boolean cleanupAlgorithms;
   algorithm
-    (dependencies, diffMap) := createDerivativeDependencies(program);
+    stageOptions := NBProgram.stageOptions(program, NBProgram.Kind.FORWARD, stageName);
+    (dependencies, diffMap) := createDerivativeDependencies(program, stageOptions);
 
     NBProgram.Options.OPTIONS(
       seedPrefix = seedPrefix,
       resultPrefix = resultPrefix,
       tmpPrefix = tmpPrefix,
       cleanupAlgorithms = cleanupAlgorithms,
-      debugOrigin = debugOrigin) := program.options;
+      debugOrigin = debugOrigin) := stageOptions;
     contextName := if tmpPrefix <> "" then tmpPrefix else program.name;
 
-    seedBaseVars := program.domainVars;
+    seedSourceVars := NBProgram.uniqueVariables(program.domainVars);
     (diffMap, seedVars) := NBProgram.mapVariables(
-      seedBaseVars,
+      seedSourceVars,
       seedPrefix,
       NBProgram.VariableRole.SEED,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diffMap,
       seedVars
     );
 
-    resultSourceVars := program.rangeVars;
+    resultSourceVars := NBProgram.uniqueVariables(program.rangeVars);
     resultBaseVars := NBProgram.getNamingVars(resultSourceVars, program.resultBaseVars);
-    tmpBaseVars := list(var for var guard(BVariable.isContinuous(var, program.staticAsContinuous)) in program.innerVars);
+    tmpSourceVars := NBProgram.uniqueVariables(
+      list(var for var guard(BVariable.isContinuous(var, program.staticAsContinuous)) in program.innerVars)
+    );
 
     (diffMap, resultVars) := NBProgram.mapVariablesWithNaming(
       resultSourceVars,
       SOME(resultBaseVars),
       resultPrefix,
       NBProgram.VariableRole.RESULT,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diffMap
     );
 
     (diffMap, tmpVars) := NBProgram.mapVariables(
-      tmpBaseVars,
+      tmpSourceVars,
       tmpPrefix,
       NBProgram.VariableRole.TMP,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diffMap,
       tmpVars
+    );
+
+    passiveSeedSourceVars := solvedSeedVariables(program.comps, program.seedVars);
+    (diffMap, tmpVars) := NBProgram.mapVariables(
+      passiveSeedSourceVars,
+      tmpPrefix,
+      NBProgram.VariableRole.TMP,
+      stageOptions,
+      program.staticAsContinuous,
+      program.idx,
+      diffMap,
+      tmpVars,
+      force = true
     );
 
     diffedComps := differentiateStrongComponentList(
@@ -155,11 +175,15 @@ protected
       debugOrigin
     );
 
+    sourceVars := NBProgram.uniqueVariables(
+      listAppend(program.sourceVars, listAppend(seedSourceVars, listAppend(resultSourceVars, tmpSourceVars)))
+    );
+
     forwardProgram := NBProgram.fromTransform(
       sourceProgram = program,
       kind          = NBProgram.Kind.FORWARD,
       dependencies  = dependencies,
-      sourceVars    = listAppend(seedBaseVars, listAppend(resultSourceVars, tmpBaseVars)),
+      sourceVars    = sourceVars,
       diffMap       = diffMap,
       comps         = diffedComps,
       vars          = NBProgram.variableSets(
@@ -169,53 +193,66 @@ protected
         seedVars       = seedVars,
         resultVars     = resultVars,
         tmpVars        = tmpVars,
-        seedBaseVars   = seedBaseVars,
-        resultBaseVars = resultBaseVars,
-        tmpBaseVars    = tmpBaseVars)
+        resultBaseVars = resultBaseVars),
+      options       = stageOptions
     );
   end createForward;
 
   function createDerivativeDependencies
     "Create derivative dependencies required before differentiating program.
 
-     Primal forward programs have no source dependency. Forward-over-adjoint
-     creates a tangent program for the adjoint source variables. Nested forward
-     programs keep their existing derivative map and differentiate non-source
-     dependencies."
+     Every call represents one independent direction. Existing derivative maps
+     are not reused; only dependencies for this direction are merged."
     input NBProgram.Program program;
+    input NBProgram.Options stageOptions;
     output list<NBProgram.Program> dependencies = {};
     output UnorderedMap<ComponentRef, ComponentRef> diffMap =
       UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
   protected
+    NBProgram.Program dependencyInput;
     NBProgram.Program source;
     NBProgram.Program tangentInput;
     NBProgram.Program tangentProgram;
     NBProgram.Program derivativeDependency;
+    NBProgram.Allocation allocation;
+    String seedPrefix, resultPrefix, tmpPrefix, debugOrigin, tangentName;
+    Boolean cleanupAlgorithms;
   algorithm
-    if program.kind == NBProgram.Kind.FORWARD then
-      diffMap := UnorderedMap.copy(program.diffMap);
-    end if;
+    NBProgram.Options.OPTIONS(
+      allocation = allocation,
+      seedPrefix = seedPrefix,
+      resultPrefix = resultPrefix,
+      tmpPrefix = tmpPrefix,
+      cleanupAlgorithms = cleanupAlgorithms,
+      debugOrigin = debugOrigin) := stageOptions;
 
     for dependency in program.dependencies loop
       if not isProgramSource(dependency, program.source) then
-        derivativeDependency := create(dependency);
+        dependencyInput := NBProgram.withOptions(
+          dependency,
+          NBProgram.options(allocation, seedPrefix, resultPrefix, tmpPrefix, cleanupAlgorithms, debugOrigin)
+        );
+        derivativeDependency := create(dependencyInput);
         dependencies := derivativeDependency :: dependencies;
         mergeDiffMap(derivativeDependency.diffMap, diffMap);
       end if;
     end for;
 
-    if program.kind <> NBProgram.Kind.FORWARD and isSome(program.source) and not listEmpty(program.sourceVars) then
+    if isSome(program.source) and not listEmpty(program.sourceVars) then
       source := Util.getOption(program.source);
+      tangentName := if tmpPrefix <> "" then "TAN_" + tmpPrefix else "TAN_" + program.name;
+
       tangentInput := NBProgram.fromSourceTangent(
         source,
-        "TAN_" + program.name,
-        program.sourceVars,
+        tangentName,
+        NBProgram.uniqueVariables(program.sourceVars),
         NBProgram.options(
           NBProgram.Allocation.FRESH,
-          program.name + "_V",
+          seedPrefix,
           "",
-          "TAN_" + program.name,
-          cleanupAlgorithms = true)
+          tangentName,
+          cleanupAlgorithms = true,
+          debugOrigin = debugOrigin)
       );
 
       tangentProgram := create(tangentInput);
@@ -229,6 +266,32 @@ protected
 
     dependencies := listReverse(dependencies);
   end createDerivativeDependencies;
+
+  function solvedSeedVariables
+    "Return stage seed variables that occur as solved variables.
+     These passive seeds need derivative crefs to keep component structure."
+    input list<StrongComponent> comps;
+    input list<Pointer<Variable>> seedVars;
+    output list<Pointer<Variable>> solvedSeeds = {};
+  protected
+    UnorderedSet<ComponentRef> solved = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
+    ComponentRef cref;
+  algorithm
+    for comp in comps loop
+      for solvedVar in StrongComponent.getVariables(comp) loop
+        UnorderedSet.add(BVariable.getVarName(solvedVar), solved);
+      end for;
+    end for;
+
+    for seedVar in seedVars loop
+      cref := BVariable.getVarName(seedVar);
+      if UnorderedSet.contains(cref, solved) then
+        solvedSeeds := seedVar :: solvedSeeds;
+      end if;
+    end for;
+
+    solvedSeeds := listReverse(solvedSeeds);
+  end solvedSeedVariables;
 
   function isProgramSource
     input NBProgram.Program dependency;
@@ -416,6 +479,35 @@ protected
 
           if not listEmpty(branches) then
             stmtsOut := Statement.IF(listReverse(branches), source) :: stmtsOut;
+          end if;
+        then ();
+
+        case Statement.WHEN(branches = branchesIn, source = source) algorithm
+          branches := {};
+          for branch in branchesIn loop
+            (condition, body) := branch;
+            body := cleanupForwardStatements(body, derivativeCrefs);
+            if not listEmpty(body) then
+              branches := (condition, body) :: branches;
+            end if;
+          end for;
+
+          if not listEmpty(branches) then
+            stmtsOut := Statement.WHEN(listReverse(branches), source) :: stmtsOut;
+          end if;
+        then ();
+
+        case Statement.WHILE(condition = condition, body = body, source = source) algorithm
+          body := cleanupForwardStatements(body, derivativeCrefs);
+          if not listEmpty(body) then
+            stmtsOut := Statement.WHILE(condition, body, source) :: stmtsOut;
+          end if;
+        then ();
+
+        case Statement.FAILURE(body = body, source = source) algorithm
+          body := cleanupForwardStatements(body, derivativeCrefs);
+          if not listEmpty(body) then
+            stmtsOut := Statement.FAILURE(body, source) :: stmtsOut;
           end if;
         then ();
 

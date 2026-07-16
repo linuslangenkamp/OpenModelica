@@ -124,7 +124,7 @@ public
             end if;
           end if;
           if isSome(association.jacobianAdjoint) then
-            str := BJacobian.toString(Util.getOption(association.jacobianAdjoint), Partition.kindToString(association.kind) + " Adjoint") + "\n";
+            str := str + "\n" + BJacobian.toString(Util.getOption(association.jacobianAdjoint), Partition.kindToString(association.kind) + " Adjoint");
           end if;
         then str;
         case CLOCKED() algorithm

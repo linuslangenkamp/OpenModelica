@@ -385,7 +385,7 @@ public
       seed_vars     := VariablePointers.getScalarVarNames(seedCandidates, false);
       partial_vars  := VariablePointers.getScalarVarNames(partialCandidates, false);
 
-      // assume full dependency
+      // Conservative full dependency fallback.
       cols := list((s, partial_vars) for s in seed_vars);
       rows := list((p, seed_vars) for p in partial_vars);
       nnz := listLength(partial_vars) * listLength(seed_vars);
@@ -421,7 +421,7 @@ public
       input UnorderedSet<ComponentRef> visited;
       input UnorderedSet<ComponentRef> dep_set "collect seed dependencies here";
     protected
-      list<ComponentRef> tmp_lst = {}; // HACK: the compiler needs help with the type
+      list<ComponentRef> tmp_lst = {};
     algorithm
       if UnorderedSet.add(cref, visited) then
         if UnorderedSet.contains(cref, seed_set) then
@@ -441,7 +441,7 @@ public
       output list<ComponentRef> dependencies;
     protected
       UnorderedSet<ComponentRef> dep_set = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
-      list<ComponentRef> tmp_lst = {}; // HACK: the compiler needs help with the type
+      list<ComponentRef> tmp_lst = {};
     algorithm
       for dep in UnorderedMap.getOrDefault(row, map, tmp_lst) loop
         resolveDependency(dep, map, seed_set, UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual), dep_set);

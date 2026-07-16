@@ -89,21 +89,32 @@ public
     "Create a symbolic adjoint program for lambda^T * F(x).
      The returned program can be differentiated again by NBForward.create."
     input NBProgram.Program program;
+    input String stageName = "";
     output NBProgram.Program adjointProgram;
   protected
     list<StrongComponent> comps, diffed_comps = {};
     UnorderedMap<ComponentRef, ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
 
     list<Pointer<Variable>> res_vars, tmp_vars, seed_vars, row_vars, base_tmp_vars, baseTmpVarCandidates;
+    list<Pointer<Variable>> sourceVars;
     list<StrongComponent> compAdjComps;
     list<Pointer<Variable>> compNewVars;
-    String seedName;
+    String seedName, seedPrefix, resultPrefix, tmpPrefix, contextName;
     NBProgram.Allocation allocation;
+    NBProgram.Options stageOptions;
+    NBProgram.Flat flat;
     VariablePointers differentiationVars;
   algorithm
-    comps := program.comps;
+    stageOptions := NBProgram.stageOptions(program, NBProgram.Kind.ADJOINT, stageName);
+    flat := NBProgram.flatten(program);
+    comps := flat.comps;
     differentiationVars := VariablePointers.fromList(program.domainVars, program.scalarized);
-    NBProgram.Options.OPTIONS(allocation = allocation) := program.options;
+    NBProgram.Options.OPTIONS(
+      allocation = allocation,
+      seedPrefix = seedPrefix,
+      resultPrefix = resultPrefix,
+      tmpPrefix = tmpPrefix) := stageOptions;
+    contextName := if tmpPrefix <> "" then tmpPrefix else program.name;
 
     for c in comps loop
       if not supportsStrongComponent(c) then
@@ -125,24 +136,27 @@ public
 
     (diff_map, res_vars) := NBProgram.mapVariables(
       program.domainVars,
-      program.name,
+      resultPrefix,
       NBProgram.VariableRole.ADJOINT_RESULT,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diff_map
     );
     res_vars := listReverse(res_vars);
 
-    row_vars := program.rangeVars;
-    (base_tmp_vars, _) := List.splitOnTrue(program.innerVars, function BVariable.isContinuous(staticAsContinuous = program.staticAsContinuous));
+    row_vars := NBProgram.uniqueVariables(program.rangeVars);
+    baseTmpVarCandidates := NBProgram.uniqueVariables(listAppend(program.innerVars, flat.tmpVars));
+    (base_tmp_vars, _) := List.splitOnTrue(
+      baseTmpVarCandidates,
+      function BVariable.isContinuous(staticAsContinuous = program.staticAsContinuous));
 
-    seedName := if allocation == NBProgram.Allocation.FRESH then program.name + "_LAMBDA" else program.name;
+    seedName := if allocation == NBProgram.Allocation.FRESH then seedPrefix + "_LAMBDA" else seedPrefix;
     (diff_map, seed_vars) := NBProgram.mapVariables(
       row_vars,
       seedName,
       NBProgram.VariableRole.SEED,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diff_map
@@ -157,9 +171,9 @@ public
 
     (diff_map, tmp_vars) := NBProgram.mapVariables(
       base_tmp_vars,
-      program.name,
+      tmpPrefix,
       NBProgram.VariableRole.ADJOINT_TMP,
-      program.options,
+      stageOptions,
       program.staticAsContinuous,
       program.idx,
       diff_map
@@ -174,7 +188,7 @@ public
 
     for comp in comps loop
       (compAdjComps, compNewVars) := generateComponent(
-        comp, diff_map, program.funcMap, program.scalarized, program.staticAsContinuous, program.idx, program.name, differentiationVars, baseTmpVarCandidates);
+        comp, diff_map, program.funcMap, program.scalarized, program.staticAsContinuous, program.idx, contextName, differentiationVars, baseTmpVarCandidates);
 
       for ac in compAdjComps loop
         diffed_comps := ac :: diffed_comps;
@@ -198,11 +212,15 @@ public
       end for;
     end if;
 
+    sourceVars := NBProgram.uniqueVariables(
+      listAppend(program.sourceVars, listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)))
+    );
+
     adjointProgram := NBProgram.fromTransform(
       sourceProgram = program,
       kind          = NBProgram.Kind.ADJOINT,
       dependencies  = {},
-      sourceVars    = listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)),
+      sourceVars    = sourceVars,
       diffMap       = diff_map,
       comps         = diffed_comps,
       vars          = NBProgram.variableSets(
@@ -212,9 +230,8 @@ public
         seedVars       = seed_vars,
         resultVars     = res_vars,
         tmpVars        = tmp_vars,
-        seedBaseVars   = listReverse(row_vars),
-        resultBaseVars = listReverse(program.domainVars),
-        tmpBaseVars    = baseTmpVarCandidates)
+        resultBaseVars = listReverse(program.domainVars)),
+      options       = stageOptions
     );
   end create;
 
@@ -356,6 +373,18 @@ protected
       UnorderedMap.tryAdd(Util.getOption(mappedSeed), {}, loop_product_adjoint_map);
     end if;
   end addEntryToLoopProductMap;
+
+  function initializeAdjointMap
+    "Whitelists the variables that may receive adjoint accumulator updates.
+     Reverse seeds are deliberately not inserted here; they are fixed inputs."
+    input list<Pointer<Variable>> targetVars;
+    input UnorderedMap<ComponentRef, ComponentRef> diff_map;
+    input UnorderedMap<ComponentRef, AdjointTermList> adjoint_map;
+  algorithm
+    for targetVar in targetVars loop
+      addEntryToLoopProductMap(targetVar, diff_map, adjoint_map);
+    end for;
+  end initializeAdjointMap;
 
   function getBaseTmpVarCandidates
     input list<NBVariable.VariablePointer> partialVars;
@@ -564,6 +593,10 @@ protected
       case StrongComponent.SINGLE_COMPONENT() algorithm
         eq := Pointer.access(c_noalias.eqn);
         fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
+        initializeAdjointMap(
+          listAppend(BVariable.VariablePointers.toList(seedCandidates), tmpVarCandidates),
+          diff_map,
+          fresh_adjoint_map);
         diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
           diffCref        = ComponentRef.EMPTY(),
           new_vars        = {},
@@ -616,6 +649,10 @@ protected
           end match;
 
         fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
+        initializeAdjointMap(
+          listAppend(BVariable.VariablePointers.toList(seedCandidates), listAppend(tmpVarCandidates, newVars)),
+          diff_map,
+          fresh_adjoint_map);
         diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
           diffCref        = ComponentRef.EMPTY(),
           new_vars        = {},
@@ -665,17 +702,17 @@ protected
 
       case StrongComponent.SLICED_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
+        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
       then ();
 
       case StrongComponent.RESIZABLE_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
+        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
       then ();
 
       case StrongComponent.GENERIC_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
+        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
       then ();
 
       else algorithm
@@ -693,6 +730,8 @@ protected
     input Boolean init;
     input Pointer<Integer> idx;
     input String contextName;
+    input VariablePointers seedCandidates;
+    input list<Pointer<Variable>> tmpVarCandidates;
     output list<StrongComponent> adjointComps = {};
   protected
     UnorderedMap<ComponentRef, AdjointTermList> fresh_adjoint_map;
@@ -702,6 +741,10 @@ protected
     list<Slice<VariablePointer>> adjVarSlices;
   algorithm
     fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
+    initializeAdjointMap(
+      listAppend(BVariable.VariablePointers.toList(seedCandidates), tmpVarCandidates),
+      diff_map,
+      fresh_adjoint_map);
     diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
       diffCref        = ComponentRef.EMPTY(),
       new_vars        = {},
@@ -753,6 +796,17 @@ protected
           for branch in s.branches loop
             varSlices := collectAdjointVarSlices(Util.tuple22(branch), varSlices);
           end for;
+        then ();
+        case Statement.WHEN() algorithm
+          for branch in s.branches loop
+            varSlices := collectAdjointVarSlices(Util.tuple22(branch), varSlices);
+          end for;
+        then ();
+        case Statement.WHILE() algorithm
+          varSlices := collectAdjointVarSlices(s.body, varSlices);
+        then ();
+        case Statement.FAILURE() algorithm
+          varSlices := collectAdjointVarSlices(s.body, varSlices);
         then ();
         else ();
       end match;
@@ -835,6 +889,69 @@ protected
     (ssaVarPtr, ssaCref) := BVariable.makeVarPtrCyclic(origVar, ssaCref);
   end makeSSAVar;
 
+  function countAlgorithmAssignments
+    input list<Statement> stmts;
+    input UnorderedMap<ComponentRef, Integer> assignCount;
+  protected
+    ComponentRef lhsCref, baseCref;
+    Integer cnt;
+  algorithm
+    for stmt in stmts loop
+      () := match stmt
+        case Statement.ASSIGNMENT() algorithm
+          lhsCref := match stmt.lhs
+            case Expression.CREF(cref = lhsCref) then lhsCref;
+            else ComponentRef.EMPTY();
+          end match;
+          if not ComponentRef.isEmpty(lhsCref) then
+            baseCref := ComponentRef.stripSubscriptsAll(lhsCref);
+            cnt := UnorderedMap.getOrDefault(baseCref, assignCount, 0);
+            UnorderedMap.add(baseCref, cnt + 1, assignCount);
+          end if;
+        then ();
+        case Statement.FOR() algorithm
+          countAlgorithmAssignments(stmt.body, assignCount);
+        then ();
+        case Statement.IF() algorithm
+          for branch in stmt.branches loop
+            countAlgorithmAssignments(Util.tuple22(branch), assignCount);
+          end for;
+        then ();
+        case Statement.WHEN() algorithm
+          for branch in stmt.branches loop
+            countAlgorithmAssignments(Util.tuple22(branch), assignCount);
+          end for;
+        then ();
+        case Statement.WHILE() algorithm
+          countAlgorithmAssignments(stmt.body, assignCount);
+        then ();
+        case Statement.FAILURE() algorithm
+          countAlgorithmAssignments(stmt.body, assignCount);
+        then ();
+        else ();
+      end match;
+    end for;
+  end countAlgorithmAssignments;
+
+  function hasAlgorithmControlFlow
+    input list<Statement> stmts;
+    output Boolean found = false;
+  algorithm
+    for stmt in stmts loop
+      found := match stmt
+        case Statement.FOR()     then true;
+        case Statement.IF()      then true;
+        case Statement.WHEN()    then true;
+        case Statement.WHILE()   then true;
+        case Statement.FAILURE() then true;
+        else false;
+      end match;
+      if found then
+        return;
+      end if;
+    end for;
+  end hasAlgorithmControlFlow;
+
   function algorithmToSSA
     input StrongComponent comp;
     output StrongComponent ssaComp;
@@ -858,28 +975,26 @@ protected
     list<tuple<ComponentRef, tuple<ComponentRef, Integer>>> replAcc = {};
     list<Pointer<Variable>> newVarsAcc = {};
     Pointer<Equation> ssaEqnPtr;
+    tuple<ComponentRef, Integer> assignmentCount;
+    Integer count;
   algorithm
     (ssaComp, replacements, newVars) := match comp
       case StrongComponent.MULTI_COMPONENT() algorithm
         eqn := Pointer.access(Slice.getT(comp.eqn));
         Equation.ALGORITHM(alg = alg) := eqn;
 
-        for origStmt in alg.statements loop
-          () := match origStmt
-            case Statement.ASSIGNMENT() algorithm
-              lhsCref := match origStmt.lhs
-                case Expression.CREF(cref = lhsCref) then lhsCref;
-                else ComponentRef.EMPTY();
-              end match;
-              if not ComponentRef.isEmpty(lhsCref) then
-                baseCref := ComponentRef.stripSubscriptsAll(lhsCref);
-                cnt := UnorderedMap.getOrDefault(baseCref, assignCount, 0);
-                UnorderedMap.add(baseCref, cnt + 1, assignCount);
-              end if;
-            then ();
-            else ();
-          end match;
-        end for;
+        countAlgorithmAssignments(alg.statements, assignCount);
+        if hasAlgorithmControlFlow(alg.statements) then
+          for entry in UnorderedMap.toList(assignCount) loop
+            assignmentCount := entry;
+            count := Util.tuple22(assignmentCount);
+            if count > 1 then
+              Error.addMessage(Error.INTERNAL_ERROR,
+                {getInstanceName() + " cannot create an adjoint SSA form for repeated assignments inside algorithm control flow."});
+              fail();
+            end if;
+          end for;
+        end if;
 
         lineIdx := 1;
         for origStmt in alg.statements loop
