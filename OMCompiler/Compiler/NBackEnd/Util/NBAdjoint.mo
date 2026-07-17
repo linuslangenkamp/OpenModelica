@@ -79,7 +79,6 @@ protected
 
   // Util imports
   import Error;
-  import Flags;
   import UnorderedMap;
   import UnorderedSet;
   import Util;
@@ -123,16 +122,7 @@ public
         });
         fail();
       end if;
-      if Flags.isSet(Flags.DEBUG_ADJOINT) then
-        print("Primal component: " + StrongComponent.toString(c) + "\n");
-      end if;
     end for;
-
-    if Flags.isSet(Flags.DEBUG_ADJOINT) then
-      print("Differentiation variables before pDer creation:\n" + BVariable.VariablePointers.toString(differentiationVars, "Differentiation Variables") + "\n");
-      print("Function variables before seed creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(program.rangeVars, program.scalarized), "Function Variables") + "\n");
-      print("Inner variables before pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(program.innerVars, program.scalarized), "Inner Variables") + "\n");
-    end if;
 
     (diff_map, res_vars) := NBProgram.mapVariables(
       program.domainVars,
@@ -163,12 +153,6 @@ public
     );
     seed_vars := listReverse(seed_vars);
 
-    if Flags.isSet(Flags.DEBUG_ADJOINT) then
-      print("seed vars after seed creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(seed_vars), "Seed Vars") + "\n");
-      print("res vars after pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(res_vars), "Res Vars") + "\n");
-      print("tmp vars before pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(base_tmp_vars), "Tmp Base Vars") + "\n");
-    end if;
-
     (diff_map, tmp_vars) := NBProgram.mapVariables(
       base_tmp_vars,
       tmpPrefix,
@@ -181,11 +165,6 @@ public
     tmp_vars := listReverse(tmp_vars);
     baseTmpVarCandidates := getBaseTmpVarCandidates(base_tmp_vars, tmp_vars, diff_map);
 
-    if Flags.isSet(Flags.DEBUG_ADJOINT) then
-      print("tmp vars after pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(tmp_vars), "Tmp Vars") + "\n");
-      print("Diff map before component generation:\n" + diffMapToString(diff_map) + "\n");
-    end if;
-
     for comp in comps loop
       (compAdjComps, compNewVars) := generateComponent(
         comp, diff_map, program.funcMap, program.scalarized, program.staticAsContinuous, program.idx, contextName, differentiationVars, baseTmpVarCandidates);
@@ -197,20 +176,7 @@ public
       for v in compNewVars loop
         tmp_vars := v :: tmp_vars;
       end for;
-
-      if Flags.isSet(Flags.DEBUG_ADJOINT) then
-        for ac in compAdjComps loop
-          print("[adjoint] generated component: " + StrongComponent.toString(ac) + "\n");
-        end for;
-      end if;
     end for;
-
-    if Flags.isSet(Flags.DEBUG_ADJOINT) then
-      print("Final list of differentiated components:\n");
-      for comp in diffed_comps loop
-        print(StrongComponent.toString(comp) + "\n");
-      end for;
-    end if;
 
     sourceVars := NBProgram.uniqueVariables(
       listAppend(program.sourceVars, listAppend(row_vars, listAppend(program.domainVars, baseTmpVarCandidates)))
@@ -612,9 +578,6 @@ protected
         eq := match Pointer.access(Slice.getT(c_noalias.eqn))
           case Equation.ALGORITHM() algorithm
             (ssaAlg, replacements, newVars) := algorithmToSSA(c_noalias);
-            if Flags.isSet(Flags.DEBUG_ADJOINT) then
-              print("SSA algorithm for adjoint of component " + StrongComponent.toString(c_noalias) + ":\n" + StrongComponent.toString(ssaAlg) + "\n");
-            end if;
 
             for ssaVarPtr in newVars loop
               makeVarTraverse(ssaVarPtr, contextName, ssaPDerVarsPtr, diff_map,
@@ -1031,14 +994,6 @@ protected
       then fail();
     end match;
   end algorithmToSSA;
-
-  function diffMapToString
-    input UnorderedMap<ComponentRef, ComponentRef> map;
-    output String s;
-  algorithm
-    s := UnorderedMap.toString(map, ComponentRef.toString, ComponentRef.toString, "\n  ", " -> ");
-    s := "{\n  " + s + "\n}";
-  end diffMapToString;
 
   annotation(__OpenModelica_Interface="nbackend");
 end NBAdjoint;

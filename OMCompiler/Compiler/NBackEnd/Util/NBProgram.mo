@@ -176,7 +176,7 @@ public
   end Flat;
 
   function defaultOptions
-    "Default AD options for one staged program name.
+    "Default derivative options for one staged program name.
      Uses the same name context for seeds, results and temporaries."
     input String name;
     input Allocation allocation = Allocation.FRESH;
@@ -184,7 +184,7 @@ public
   end defaultOptions;
 
   function options
-    "Create explicit AD naming/allocation options.
+    "Create explicit derivative naming/allocation options.
      Use this when nested derivatives need separate seed/result/tmp names."
     input Allocation allocation;
     input String seedPrefix;
@@ -235,7 +235,7 @@ public
 
   function fromStrongComponents
     "Create the primal staged program from backend strong components.
-     Discrete strong components are ignored because AD only handles active code."
+     Discrete strong components are ignored because derivatives only handle active code."
     input String name;
     input VariablePointers domainVars;
     input VariablePointers rangeVars;
@@ -379,7 +379,7 @@ public
   end fromSourceTangent;
 
   function mapVariables
-    "Map base variables to derivative variables for one AD role."
+    "Map base variables to derivative variables for one stage role."
     input list<Pointer<Variable>> baseVars;
     input String name;
     input VariableRole role;

@@ -39,7 +39,7 @@ encapsulated package NBOptimization
  description: New-backend dynamic optimization artifact construction.
               This module owns GDOP-specific function-row and differentiation
               variable selection. It delegates derivative construction to the
-              shared Jacobian/AD infrastructure.
+              shared derivative infrastructure.
 "
 
 public
@@ -139,7 +139,7 @@ protected
   function enabled
     output Boolean b;
   algorithm
-    b := Flags.getConfigBool(Flags.MOO_DYNAMIC_OPTIMIZATION) or Flags.getConfigBool(Flags.MOO_GDOP);
+    b := Flags.getConfigBool(Flags.MOO_DYNAMIC_OPTIMIZATION);
   end enabled;
 
   function applyToOptionalPartitions

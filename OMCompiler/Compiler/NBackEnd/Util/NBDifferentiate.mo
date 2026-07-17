@@ -757,7 +757,7 @@ public
         end if;
       end for;
 
-      // Clear the adjoint_map for next use.
+      // Clear the adjoint_map for next use
       UnorderedMap.clear(amap);
       diffArguments.adjoint_map := SOME(amap);
     end if;
@@ -2243,9 +2243,7 @@ public
       else UnorderedSet.new(InstNode.hash, InstNode.nameEqual);
     end match;
 
-    // add all interface nodes of func (inputs, locals, outputs) since all have been
-    // differentiated to produce der_func; this prevents re-differentiation of func.outputs
-    // that became locals in der_func when creating higher-order derivatives
+    // skip already differentiated interface nodes in higher-order derivatives
     for node in func.inputs loop
       UnorderedSet.add(node, diffInfo);
     end for;
@@ -2440,7 +2438,6 @@ public
           new_nodes := d_node :: new_nodes;
           // add to skipped nodes if differentiated again because the derivative now already exists
           UnorderedSet.add(node, diffInfo);
-        else
         end if;
       end if;
     end for;
@@ -2698,10 +2695,6 @@ public
       then if isReverse then {diff_stmt} else {diff_stmt, stmt};
 
       // I-b. differentiate record-type assignment from a function call
-      // e.g. f := Helmholtz(d, T) where f is a record — propagate seeds through
-      // the called function so the derivative record gets populated correctly.
-      // Without this, the derivative variable is left zero-initialised and the
-      // analytical Jacobian for any NLS that calls the outer function is wrong.
       case diff_stmt as Statement.ASSIGNMENT() guard(
         Type.isComplex(Expression.typeOf(diff_stmt.lhs)) and
         Expression.isCall(diff_stmt.rhs)

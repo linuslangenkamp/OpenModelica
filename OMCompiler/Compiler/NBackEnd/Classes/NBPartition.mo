@@ -115,31 +115,27 @@ public
     function toString
       input Association association;
       output String str;
-    protected
-      Boolean dumpMOO;
     algorithm
       str := match association
         case CONTINUOUS() algorithm
-          dumpMOO := Flags.getConfigBool(Flags.MOO_DYNAMIC_OPTIMIZATION) or Flags.getConfigBool(Flags.MOO_GDOP);
           str := "";
           if isSome(association.jacobian) then
             str := appendJacobianString(str, Util.getOption(association.jacobian), Partition.kindToString(association.kind));
-          elseif not isSome(association.jacobianAdjoint) and not (dumpMOO and (isSome(association.LFG_jacobian) or isSome(association.MRF_jacobian) or isSome(association.R0_jacobian))) then
-            str := StringUtil.headline_1("No Jacobian");
           end if;
-          if dumpMOO then
-            if isSome(association.LFG_jacobian) then
-              str := appendJacobianString(str, Util.getOption(association.LFG_jacobian), Partition.kindToString(association.kind));
-            end if;
-            if isSome(association.MRF_jacobian) then
-              str := appendJacobianString(str, Util.getOption(association.MRF_jacobian), Partition.kindToString(association.kind));
-            end if;
-            if isSome(association.R0_jacobian) then
-              str := appendJacobianString(str, Util.getOption(association.R0_jacobian), Partition.kindToString(association.kind));
-            end if;
+          if isSome(association.LFG_jacobian) then
+            str := appendJacobianString(str, Util.getOption(association.LFG_jacobian), Partition.kindToString(association.kind));
+          end if;
+          if isSome(association.MRF_jacobian) then
+            str := appendJacobianString(str, Util.getOption(association.MRF_jacobian), Partition.kindToString(association.kind));
+          end if;
+          if isSome(association.R0_jacobian) then
+            str := appendJacobianString(str, Util.getOption(association.R0_jacobian), Partition.kindToString(association.kind));
           end if;
           if isSome(association.jacobianAdjoint) then
             str := appendJacobianString(str, Util.getOption(association.jacobianAdjoint), Partition.kindToString(association.kind) + " Adjoint");
+          end if;
+          if str == "" then
+            str := StringUtil.headline_1("No Jacobian");
           end if;
         then str;
         case CLOCKED() algorithm
