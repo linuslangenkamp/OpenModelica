@@ -757,7 +757,7 @@ public
         end if;
       end for;
 
-      // Clear the adjoint_map for next use
+      // Clear the adjoint_map for next use.
       UnorderedMap.clear(amap);
       diffArguments.adjoint_map := SOME(amap);
     end if;
@@ -1187,8 +1187,7 @@ public
           res := Expression.fromCref(UnorderedMap.getOrFail(exp.cref, diff_map));
 
           // Accumulate adjoint contribution: append current_grad to list at key exp.cref.
-          if diffArguments.collectAdjoints
-             and UnorderedMap.contains(exp.cref, Util.getOption(diffArguments.adjoint_map)) then
+          if diffArguments.collectAdjoints then
             UnorderedMap.tryAddUpdate(exp.cref, function updateAdjointList(current_grad = diffArguments.current_grad), Util.getOption(diffArguments.adjoint_map));
           end if;
         else
@@ -1215,9 +1214,10 @@ public
           dbg("[dCREF:JAC] get variable for derivative cref: " + NBVariable.pointerToString(NBVariable.getVarPointer(derCref, sourceInfo())));
           if diffArguments.collectAdjoints then // if derCref is on the rhs then collect adjoint (collectAdjoints is false when differentiating lhs)
             adjointKey := ComponentRef.copySubscripts(exp.cref, derCref);
-            if UnorderedMap.contains(adjointKey, Util.getOption(diffArguments.adjoint_map)) then
-              UnorderedMap.tryAddUpdate(adjointKey, function updateAdjointList(current_grad = diffArguments.current_grad), Util.getOption(diffArguments.adjoint_map));
+            if not UnorderedMap.contains(adjointKey, Util.getOption(diffArguments.adjoint_map)) then
+              UnorderedMap.tryAdd(adjointKey, {}, Util.getOption(diffArguments.adjoint_map));
             end if;
+            UnorderedMap.tryAddUpdate(adjointKey, function updateAdjointList(current_grad = diffArguments.current_grad), Util.getOption(diffArguments.adjoint_map));
           else
             dbg("[dCREF:JAC] collectAdjoints=false, skip append");
           end if;

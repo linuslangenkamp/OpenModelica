@@ -1282,7 +1282,7 @@ protected
         comp.strict := strict;
 
         if Flags.isSet(Flags.JAC_DUMP) then
-          print(StrongComponent.toString(comp) + "\n");
+          print("\n" + StrongComponent.toString(comp) + "\n");
         end if;
       then (comp, true);
       else (comp, false);

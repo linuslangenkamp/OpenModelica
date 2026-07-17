@@ -374,18 +374,6 @@ protected
     end if;
   end addEntryToLoopProductMap;
 
-  function initializeAdjointMap
-    "Whitelists the variables that may receive adjoint accumulator updates.
-     Reverse seeds are deliberately not inserted here; they are fixed inputs."
-    input list<Pointer<Variable>> targetVars;
-    input UnorderedMap<ComponentRef, ComponentRef> diff_map;
-    input UnorderedMap<ComponentRef, AdjointTermList> adjoint_map;
-  algorithm
-    for targetVar in targetVars loop
-      addEntryToLoopProductMap(targetVar, diff_map, adjoint_map);
-    end for;
-  end initializeAdjointMap;
-
   function getBaseTmpVarCandidates
     input list<NBVariable.VariablePointer> partialVars;
     input list<NBVariable.VariablePointer> tmpPDerVars;
@@ -593,10 +581,6 @@ protected
       case StrongComponent.SINGLE_COMPONENT() algorithm
         eq := Pointer.access(c_noalias.eqn);
         fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
-        initializeAdjointMap(
-          listAppend(BVariable.VariablePointers.toList(seedCandidates), tmpVarCandidates),
-          diff_map,
-          fresh_adjoint_map);
         diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
           diffCref        = ComponentRef.EMPTY(),
           new_vars        = {},
@@ -646,13 +630,9 @@ protected
           end match;
           else algorithm
             then Pointer.access(Slice.getT(c_noalias.eqn));
-          end match;
+        end match;
 
         fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
-        initializeAdjointMap(
-          listAppend(BVariable.VariablePointers.toList(seedCandidates), listAppend(tmpVarCandidates, newVars)),
-          diff_map,
-          fresh_adjoint_map);
         diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
           diffCref        = ComponentRef.EMPTY(),
           new_vars        = {},
@@ -741,10 +721,6 @@ protected
     list<Slice<VariablePointer>> adjVarSlices;
   algorithm
     fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
-    initializeAdjointMap(
-      listAppend(BVariable.VariablePointers.toList(seedCandidates), tmpVarCandidates),
-      diff_map,
-      fresh_adjoint_map);
     diffArgs := Differentiate.DIFFERENTIATION_ARGUMENTS(
       diffCref        = ComponentRef.EMPTY(),
       new_vars        = {},
