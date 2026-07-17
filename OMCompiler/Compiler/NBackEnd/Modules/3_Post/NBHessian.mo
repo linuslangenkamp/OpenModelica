@@ -281,7 +281,11 @@ protected
       variables     = VariablePointers.fromList(flat.variables),
       unknowns      = VariablePointers.fromList(flat.unknowns),
       auxiliaries   = VariablePointers.fromList(flat.auxiliaries),
-      resultVars    = VariablePointers.fromList(flat.resultVars),
+      resultVars    = VariablePointers.fromList(NBProgram.lookupMappedVariables(
+        NBProgram.lookupMappedVariables(
+          NBProgram.uniqueVariables(VariablePointers.toList(differentiationVars)),
+          adjointProgram.diffMap),
+        program.diffMap)),
       tmpVars       = VariablePointers.fromList(flat.tmpVars),
       lambdaVars    = VariablePointers.fromList(adjointProgram.seedVars),
       directionVars = VariablePointers.fromList(directionVars),

@@ -1465,12 +1465,6 @@ protected
   end jacobianNone;
 
 public
-  function isLfgFunctionOrResidual
-    extends BVariable.checkVar;
-  algorithm
-    b := BVariable.isResidual(var_ptr) or BVariable.isLfgFunction(var_ptr);
-  end isLfgFunctionOrResidual;
-
   function getTmpFilterFunction
     " - ODE filter by state derivative / algebraic
       - LS/NLS/DAE filter by residual / inner"
@@ -1482,7 +1476,7 @@ public
       case JacobianType.DAE     then BVariable.isResidual;
       case JacobianType.LS      then BVariable.isResidual;
       case JacobianType.NLS     then BVariable.isResidual;
-      case JacobianType.OPT_LFG then isLfgFunctionOrResidual;
+      case JacobianType.OPT_LFG then BVariable.isLfgFunction;
       case JacobianType.OPT_MRF then BVariable.isMrfFunction;
       case JacobianType.OPT_R0  then BVariable.isInitialConstraint;
       else algorithm

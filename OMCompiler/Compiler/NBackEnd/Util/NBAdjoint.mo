@@ -645,17 +645,17 @@ protected
 
       case StrongComponent.SLICED_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
+        adjointComps := generateForComponent(eq, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
       case StrongComponent.RESIZABLE_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
+        adjointComps := generateForComponent(eq, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
       case StrongComponent.GENERIC_COMPONENT() algorithm
         eq := Pointer.access(Slice.getT(c_noalias.eqn));
-        adjointComps := generateForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName, seedCandidates, tmpVarCandidates);
+        adjointComps := generateForComponent(eq, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
       else algorithm
@@ -666,15 +666,12 @@ protected
 
   function generateForComponent
     input Equation eq;
-    input StrongComponent originalComp;
     input UnorderedMap<ComponentRef, ComponentRef> diff_map;
     input UnorderedMap<Path, Function> funcMap;
     input Boolean scalarized;
     input Boolean init;
     input Pointer<Integer> idx;
     input String contextName;
-    input VariablePointers seedCandidates;
-    input list<Pointer<Variable>> tmpVarCandidates;
     output list<StrongComponent> adjointComps = {};
   protected
     UnorderedMap<ComponentRef, AdjointTermList> fresh_adjoint_map;
