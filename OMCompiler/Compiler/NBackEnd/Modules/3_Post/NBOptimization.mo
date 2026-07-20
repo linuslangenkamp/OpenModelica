@@ -86,7 +86,7 @@ public
     input NBPartition.Kind kind;
   protected
     constant Module.jacobianInterface func = BJacobian.getModule();
-    VariablePointers knowns;
+    VariablePointers knowns, topLevelInputs;
     list<BackendDAE> optParts = {};
     list<BackendDAE> eventOptParts = {};
     BackendDAE.OptimizationFormulation formulation;
@@ -99,7 +99,7 @@ public
     end if;
 
     bdae := match bdae
-      case BackendDAE.MAIN(varData = BVariable.VAR_DATA_SIM(knowns = knowns))
+      case BackendDAE.MAIN(varData = BVariable.VAR_DATA_SIM(knowns = knowns, top_level_inputs = topLevelInputs))
         algorithm
           if Flags.isSet(Flags.JAC_DUMP) then
             print(StringUtil.headline_1("[symjacdump] Creating optimization artifacts:") + "\n");
@@ -108,15 +108,15 @@ public
           if kind == NBPartition.Kind.DAE and isSome(bdae.dae) then
             formulation := BackendDAE.OptimizationFormulation.DAE;
             daeParts := bdae.dae;
-            (daeParts, optParts) := applyToOptionalPartitions(daeParts, knowns, formulation, func, bdae.funcMap, optIndex);
+            (daeParts, optParts) := applyToOptionalPartitions(daeParts, knowns, topLevelInputs, formulation, func, bdae.funcMap, optIndex);
             bdae.dae := daeParts;
           else
             formulation := BackendDAE.OptimizationFormulation.ODE;
             parts := bdae.ode;
-            (parts, optParts) := applyToPartitions(parts, knowns, formulation, func, bdae.funcMap, optIndex);
+            (parts, optParts) := applyToPartitions(parts, knowns, topLevelInputs, formulation, func, bdae.funcMap, optIndex);
             bdae.ode := parts;
             parts := bdae.ode_event;
-            (parts, eventOptParts) := applyToPartitions(parts, knowns, formulation, func, bdae.funcMap, optIndex);
+            (parts, eventOptParts) := applyToPartitions(parts, knowns, topLevelInputs, formulation, func, bdae.funcMap, optIndex);
             bdae.ode_event := parts;
             for optPart in listReverse(optParts) loop
               eventOptParts := optPart :: eventOptParts;
@@ -145,6 +145,7 @@ protected
   function applyToOptionalPartitions
     input output Option<list<Partition.Partition>> partitions;
     input VariablePointers knowns;
+    input VariablePointers topLevelInputs;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
@@ -155,7 +156,7 @@ protected
   algorithm
     if isSome(partitions) then
       parts := Util.getOption(partitions);
-      (parts, optParts) := applyToPartitions(parts, knowns, formulation, func, funcMap, optIndex);
+      (parts, optParts) := applyToPartitions(parts, knowns, topLevelInputs, formulation, func, funcMap, optIndex);
       partitions := SOME(parts);
     end if;
   end applyToOptionalPartitions;
@@ -163,6 +164,7 @@ protected
   function applyToPartitions
     input output list<Partition.Partition> partitions;
     input VariablePointers knowns;
+    input VariablePointers topLevelInputs;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
@@ -174,7 +176,7 @@ protected
     list<Partition.Partition> newParts = {};
   algorithm
     for p in partitions loop
-      (part, optPart) := partOptimization(p, knowns, formulation, func, funcMap, optIndex);
+      (part, optPart) := partOptimization(p, knowns, topLevelInputs, formulation, func, funcMap, optIndex);
       newParts := part :: newParts;
       if isSome(optPart) then
         optParts := Util.getOption(optPart) :: optParts;
@@ -188,6 +190,7 @@ protected
   function partOptimization
     input output Partition.Partition part;
     input VariablePointers allKnowns;
+    input VariablePointers topLevelInputs;
     input BackendDAE.OptimizationFormulation formulation;
     input Module.jacobianInterface func;
     input UnorderedMap<Path, Function> funcMap;
@@ -204,7 +207,7 @@ protected
       return;
     end if;
 
-    differentiationVars := getDifferentiationVars(part, allKnowns, formulation);
+    differentiationVars := getDifferentiationVars(part, allKnowns, topLevelInputs, formulation);
     lfgFunctionVars := VariablePointers.fromList(getLfgFunctionVars(part, formulation), part.unknowns.scalarized);
     mrfFunctionVars := VariablePointers.fromList(getMrfFunctionVars(part), part.unknowns.scalarized);
     r0FunctionVars  := VariablePointers.fromList(getR0FunctionVars(part),  part.unknowns.scalarized);
@@ -615,14 +618,15 @@ protected
   end setOptimizationJacobians;
 
   function getDifferentiationVars
-    "GDOP columns: states and optimizable inputs/parameters, including optimizable time parameters."
+    "GDOP columns: states, input controls, and explicitly optimizable parameters."
     input Partition.Partition part;
     input VariablePointers allKnowns;
+    input VariablePointers topLevelInputs;
     input BackendDAE.OptimizationFormulation formulation;
     output VariablePointers differentiationVars;
   protected
     VariablePointers unknowns;
-    list<Pointer<Variable>> derivativeVars, stateVars, optimizableVars;
+    list<Pointer<Variable>> derivativeVars, stateVars, controlVars, optimizableVars;
   algorithm
     unknowns := match (formulation, part.daeUnknowns)
       case (BackendDAE.OptimizationFormulation.DAE, SOME(unknowns)) then unknowns;
@@ -631,8 +635,9 @@ protected
 
     derivativeVars := list(var for var guard(BVariable.isStateDerivative(var)) in VariablePointers.toList(unknowns));
     stateVars := list(Util.getOption(BVariable.getVarState(var)) for var in derivativeVars);
-    optimizableVars := list(var for var guard(BVariable.isOptimizable(var)) in VariablePointers.toList(allKnowns));
-    differentiationVars := VariablePointers.fromList(listAppend(stateVars, optimizableVars), part.unknowns.scalarized);
+    controlVars := VariablePointers.toList(topLevelInputs);
+    optimizableVars := list(var for var guard(BVariable.isOptimizable(var) and not BVariable.isInput(var)) in VariablePointers.toList(allKnowns));
+    differentiationVars := VariablePointers.fromList(listAppend(stateVars, listAppend(controlVars, optimizableVars)), part.unknowns.scalarized);
   end getDifferentiationVars;
 
   function getLfgFunctionVars

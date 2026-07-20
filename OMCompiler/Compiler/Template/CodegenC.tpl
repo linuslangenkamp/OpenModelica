@@ -5855,10 +5855,9 @@ match sparsepattern
       omc_fclose(pFile);
 
       <%if isBidirectional then <<
-      /* Initialize adjoint Jacobian and set up bidirectional evaluation */
+      /* Link the separately initialized adjoint Jacobian for bidirectional evaluation. */
       {
         JACOBIAN* adjJac = &data->simulationInfo->analyticJacobians[<%adjointJacobianIndex%>];
-        <%symbolName(modelNamePrefix,"initialAnalyticJacobian")%><%adjointMatrixName%>(data, threadData, adjJac);
         jacobian->isBidirectional = 1;
         jacobian->adjointJacobian = adjJac;
         initBidirectionalRecovery(jacobian);

@@ -133,7 +133,6 @@ public
       program.idx,
       diff_map
     );
-    res_vars := listReverse(res_vars);
 
     row_vars := NBProgram.uniqueVariables(program.rangeVars);
     baseTmpVarCandidates := NBProgram.uniqueVariables(listAppend(program.innerVars, flat.tmpVars));
@@ -151,7 +150,6 @@ public
       program.idx,
       diff_map
     );
-    seed_vars := listReverse(seed_vars);
 
     (diff_map, tmp_vars) := NBProgram.mapVariables(
       base_tmp_vars,
@@ -162,7 +160,6 @@ public
       program.idx,
       diff_map
     );
-    tmp_vars := listReverse(tmp_vars);
     baseTmpVarCandidates := getBaseTmpVarCandidates(base_tmp_vars, tmp_vars, diff_map);
 
     for comp in comps loop
@@ -196,7 +193,7 @@ public
         seedVars       = seed_vars,
         resultVars     = res_vars,
         tmpVars        = tmp_vars,
-        resultBaseVars = listReverse(program.domainVars)),
+        resultBaseVars = program.domainVars),
       options       = stageOptions
     );
   end create;
