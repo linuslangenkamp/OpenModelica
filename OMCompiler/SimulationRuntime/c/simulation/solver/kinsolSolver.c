@@ -35,7 +35,6 @@
 #include "omc_math.h"
 #include "../options.h"
 #include "../simulation_info_json.h"
-#include "../jacobian_util.h"
 #include "sundials_util.h"
 #include "util/omc_error.h"
 
@@ -55,13 +54,10 @@
 
 /* Function prototypes */
 static int nlsKinsolResiduals(N_Vector x, N_Vector f, void* userData);
-static int nlsSparseJac(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac,
-                        void* userData, N_Vector tmp1, N_Vector tmp2);
-int nlsSparseSymJac(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac,
-                    void* userData, N_Vector tmp1, N_Vector tmp2);
-static int nlsDenseJac(long int N, N_Vector vecX, N_Vector vecFX,
-                       SUNMatrix Jac, NLS_USERDATA *kinsolUserData,
-                       N_Vector tmp1, N_Vector tmp2);
+static int nlsKinsolJacobian(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac, void* userData, N_Vector tmp1, N_Vector tmp2);
+static int nlsKinsolDenseDerivativeTest(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData, NLS_KINSOL_DATA *kinsolData,
+                                        const modelica_real *x, SUNMatrix Jsym, SolverCaller caller);
+static void finishSparseColPtr(SUNMatrix A, int nnz);
 static void nlsKinsolJacSumSparse(SUNMatrix A);
 static void nlsKinsolJacSumDense(SUNMatrix A);
 
@@ -108,10 +104,10 @@ void initKinsolMemory(NLS_KINSOL_DATA *kinsolData) {
   int flag;
   int size = kinsolData->size;
   NONLINEAR_SYSTEM_DATA *nlsData = kinsolData->userData->nlsData;
-  SPARSE_PATTERN* sparsePattern = nlsData->sparsePattern;
+  const SPARSE_PATTERN *sparsePattern = nlsJacobianPattern(kinsolData->userData);
 
   /* Free KINSOL memory block */
-  if (kinsolData->kinsolMemory != NULL || kinsolData->J != NULL || kinsolData->scaledJ != NULL) {
+  if (kinsolData->kinsolMemory != NULL || kinsolData->J != NULL) {
     errorStreamPrint(OMC_LOG_STDOUT, 0,
                      "KINSOL: Already allocated kinsol memory. Loosing memory!");
   }
@@ -137,13 +133,9 @@ void initKinsolMemory(NLS_KINSOL_DATA *kinsolData) {
       kinsolData->linearSolverMethod == NLS_LS_LAPACK) {
     kinsolData->J = SUNDenseMatrix(size, size, kinsolData->sunctx);
   } else if (kinsolData->linearSolverMethod == NLS_LS_KLU) {
-    if (!sparsePattern) {
-      kinsolData->nnz = size*size;
-    } else {
-      kinsolData->nnz = sparsePattern->nnz;
-    }
+    assertStreamPrint(kinsolData->userData->threadData, sparsePattern != NULL, "KINSOL with KLU requires a nonlinear Jacobian sparsity pattern");
+    kinsolData->nnz = sparsePattern->nnz;
     kinsolData->J = SUNSparseMatrix(size, size, kinsolData->nnz, SUN_CSC_MAT, kinsolData->sunctx);
-    kinsolData->scaledJ = SUNSparseMatrix(size, size, kinsolData->nnz, SUN_CSC_MAT, kinsolData->sunctx);
   }
 
   /* Create linear solver object */
@@ -174,17 +166,8 @@ void initKinsolMemory(NLS_KINSOL_DATA *kinsolData) {
                             kinsolData->J);
   checkReturnFlag_SUNDIALS(flag, SUNDIALS_KINLS_FLAG, "KINSetLinearSolver");
 
-  /* Set Jacobian for non-linear solver */
-  if (kinsolData->linearSolverMethod == NLS_LS_KLU) {
-    if (nlsData->analyticalJacobianColumn != NULL && sparsePattern != NULL) {
-      flag = KINSetJacFn(kinsolData->kinsolMemory, nlsSparseSymJac); /* Use symbolic Jacobian with sparsity pattern*/
-    } else if (sparsePattern != NULL) {
-      flag = KINSetJacFn(kinsolData->kinsolMemory, nlsSparseJac); /* Use numeric Jacobian with sparsity pattern */
-    } else {
-      throwStreamPrint(NULL, "KINSOL: In function initKinsolMemory: Sparse linear solver KLU needs sparse Jacobian, but no sparsity pattern is available. Use a dense non-linear solver instead of KINSOL.");
-    }
-    checkReturnFlag_SUNDIALS(flag, SUNDIALS_KINLS_FLAG, "KINSetJacFn");
-  }
+  flag = KINSetJacFn(kinsolData->kinsolMemory, nlsKinsolJacobian);
+  checkReturnFlag_SUNDIALS(flag, SUNDIALS_KINLS_FLAG, "KINSetJacFn");
 
   /* Configuration */
   nlsKinsolConfigSetup(kinsolData);
@@ -196,15 +179,15 @@ void initKinsolMemory(NLS_KINSOL_DATA *kinsolData) {
  * @param size                  Size of non-linear problem.
  * @param userData              Pointer to set NLS user data.
  * @param attemptRetry          True if KINSOL should retry with different settings after solution failed.
- * @param isPatternAvailable    True if sparsity pattern of Jacobian is available. Allocate work vectors for KLU in that case.
  * @return NLS_KINSOL_DATA*     Pointer to allocated KINSOL data.
  */
-NLS_KINSOL_DATA* nlsKinsolAllocate(int size, NLS_USERDATA* userData, modelica_boolean attemptRetry, modelica_boolean isPatternAvailable) {
+NLS_KINSOL_DATA* nlsKinsolAllocate(int size, NLS_USERDATA* userData, modelica_boolean attemptRetry) {
   /* Allocate system data */
   NLS_KINSOL_DATA *kinsolData = (NLS_KINSOL_DATA *)calloc(1, sizeof(NLS_KINSOL_DATA));
 
   kinsolData->size = size;
   kinsolData->linearSolverMethod = userData->nlsData->nlsLinearSolver;
+  kinsolData->jacobianMethod = NLS_JACOBIAN_AUTO;
   kinsolData->solved = NLS_FAILED;
   kinsolData->userData = userData;
 
@@ -222,31 +205,14 @@ NLS_KINSOL_DATA* nlsKinsolAllocate(int size, NLS_USERDATA* userData, modelica_bo
   kinsolData->scsteptol = newtonXTol; /* step tolerance */
 
   kinsolData->maxstepfactor = maxStepFactor; /* step tolerance */
-  kinsolData->nominalJac = 0; /* calculate for scaling the scaled matrix */
   kinsolData->attemptRetry = attemptRetry;
 
   kinsolData->initialGuess = N_VNew_Serial(size, kinsolData->sunctx);
-  kinsolData->xScale = N_VNew_Serial(size, kinsolData->sunctx);
-  kinsolData->fScale = N_VNew_Serial(size, kinsolData->sunctx);
-  kinsolData->fRes = N_VNew_Serial(size, kinsolData->sunctx);
-  kinsolData->fTmp = N_VNew_Serial(size, kinsolData->sunctx);
+  kinsolData->scale = N_VNew_Serial(size, kinsolData->sunctx);
+  N_VConst(1.0, kinsolData->scale);
 
   kinsolData->y = N_VNew_Serial(size, kinsolData->sunctx);
   kinsolData->J = NULL;
-
-  /* tmp1, tmp2 only needed for numeric Jacobian */
-  if (userData->nlsData->analyticalJacobianColumn != NULL &&
-      isPatternAvailable &&
-      kinsolData->linearSolverMethod == NLS_LS_KLU)
-  {
-    kinsolData->tmp1 = NULL;
-    kinsolData->tmp2 = NULL;
-  } else {
-    kinsolData->tmp1 = N_VNew_Serial(size, kinsolData->sunctx);
-    kinsolData->tmp2 = N_VNew_Serial(size, kinsolData->sunctx);
-  }
-  /* Scaled Jacobian is allocated with J */
-  kinsolData->scaledJ = NULL;
 
   kinsolData->kinsolMemory = NULL;
 
@@ -266,20 +232,12 @@ void nlsKinsolFree(NLS_KINSOL_DATA* kinsolData) {
   KINFree((void *)&kinsolData->kinsolMemory);
 
   N_VDestroy_Serial(kinsolData->initialGuess);
-  N_VDestroy_Serial(kinsolData->xScale);
-  N_VDestroy_Serial(kinsolData->fScale);
-  N_VDestroy_Serial(kinsolData->fRes);
-  N_VDestroy_Serial(kinsolData->fTmp);
+  N_VDestroy_Serial(kinsolData->scale);
 
   /* Free linear solver data */
   SUNLinSolFree(kinsolData->linSol);
   SUNMatDestroy(kinsolData->J);
-  SUNMatDestroy(kinsolData->scaledJ);
   N_VDestroy_Serial(kinsolData->y);
-  if (kinsolData->tmp1 != NULL) {
-    N_VDestroy_Serial(kinsolData->tmp1);
-    N_VDestroy_Serial(kinsolData->tmp2);
-  }
 
   /* The context has to outlive every SUNDIALS object created with it */
   SUNContext_Free(&kinsolData->sunctx);
@@ -303,12 +261,11 @@ static int nlsKinsolResiduals(N_Vector x, N_Vector f, void* userData) {
   double *fdata = NV_DATA_S(f);
 
   NLS_USERDATA* kinsolUserData = (NLS_USERDATA*)userData;
-  DATA* data = kinsolUserData->data;
-  threadData_t* threadData = kinsolUserData->threadData;
   NONLINEAR_SYSTEM_DATA* nlsData = kinsolUserData->nlsData;
   NLS_KINSOL_DATA* kinsolData = (NLS_KINSOL_DATA*)nlsData->solverData;
-  RESIDUAL_USERDATA resUserData = {.data=data, .threadData=threadData, .solverData=kinsolUserData->solverData};
-  int iflag = 1 /* recoverable error */;
+  threadData_t *threadData = kinsolUserData->threadData;
+  volatile int iflag = 1 /* recoverable error */;
+  int result;
 
   /* Update statistics */
   kinsolData->countResCalls++;
@@ -317,9 +274,8 @@ static int nlsKinsolResiduals(N_Vector x, N_Vector f, void* userData) {
   MMC_TRY_INTERNAL(simulationJumpBuffer)
 #endif
 
-  /* call residual function */
-  nlsData->residualFunc(&resUserData, xdata, fdata, (const int *)&iflag);
-  iflag = 0 /* success */;
+  result = nlsResidual(kinsolUserData, xdata, fdata, (const int*) &iflag);
+  iflag = result ? 1 : 0;
 
 #ifndef OMC_EMCC
   MMC_CATCH_INTERNAL(simulationJumpBuffer)
@@ -328,87 +284,65 @@ static int nlsKinsolResiduals(N_Vector x, N_Vector f, void* userData) {
   return iflag;
 }
 
-/**
- * @brief Calculate dense Jacobian matrix.
- *
- * @param N               Size of vecX and vecFX.
- * @param vecX            Vector x.
- * @param vecFX           Residual vector f(x).
- * @param Jac             Dense Jacobian matrix J(x).
- * @param kinsolUserData  Pointer to Kinsol user data.
- * @param tmp1            Unused, only to match interface of KINLsJacFn
- * @param tmp2            Unused, only to match interface of KINLsJacFn
- * @return int            Return 0 on success, -1 on failure.
- */
-static int nlsDenseJac(long int N,
-                       N_Vector vecX,
-                       N_Vector vecFX,
-                       SUNMatrix Jac,
-                       NLS_USERDATA *kinsolUserData,
-                       N_Vector tmp1,
-                       N_Vector tmp2) {
+/** Common scaled Jacobian adapter for KINSOL dense and CSC matrices. */
+static int nlsKinsolJacobian(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac, void* userData, N_Vector tmp1, N_Vector tmp2)
+{
+  NLS_USERDATA *kinsolUserData = (NLS_USERDATA*) userData;
   DATA *data = kinsolUserData->data;
-  threadData_t *threadData = kinsolUserData->threadData;
   NONLINEAR_SYSTEM_DATA *nlsData = kinsolUserData->nlsData;
-  NLS_KINSOL_DATA *kinsolData = (NLS_KINSOL_DATA *)nlsData->solverData;
+  NLS_KINSOL_DATA *kinsolData = (NLS_KINSOL_DATA*) nlsData->solverData;
+  const modelica_boolean sparse = SUNMatGetID(Jac) == SUNMATRIX_SPARSE;
+  const SPARSE_PATTERN *pattern = nlsJacobianPattern(kinsolUserData);
+  modelica_integer column;
+  unsigned int nz;
+  int result;
 
-  if (SUNMatGetID(Jac) != SUNMATRIX_DENSE) {
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: nlsDenseJac illegal input Jac. Matrix is not dense!");
-    return -1;
-  }
+  if (!sparse && SUNMatGetID(Jac) != SUNMATRIX_DENSE) return -1;
 
-  /* prepare variables */
-  double *x = N_VGetArrayPointer(vecX);
-  double *fx = N_VGetArrayPointer(vecFX);
-  double *xScaling = NV_DATA_S(kinsolData->xScale);
-  double *fRes = NV_DATA_S(kinsolData->fRes);
-  double xsave, xscale, sign;
-  double delta_hh;
-  const double delta_h = sqrt(DBL_EPSILON * 2e1);
-
-  long int i, j;
-
-  /* performance measurement */
   rt_ext_tp_tick(&nlsData->jacobianTimeClock);
+  result = nlsJacobian(kinsolUserData, NV_DATA_S(vecX), sparse ? SM_DATA_S(Jac) : SM_DATA_D(Jac), sparse,
+                       kinsolData->jacobianMethod);
+  nlsData->jacobianTime += rt_ext_tp_tock(&nlsData->jacobianTimeClock);
+  if (result) return 1;
 
-  /* Use forward difference quotient to approximate Jacobian */
-  for (i = 0; i < N; i++) {
-    xsave = x[i];
-    delta_hh = delta_h * (fabs(xsave) + 1.0);
-    if ((xsave + delta_hh >= nlsData->max[i])) {
-      delta_hh *= -1.0;
+  if (sparse) {
+    assertStreamPrint(kinsolUserData->threadData, pattern != NULL, "KINSOL sparse Jacobian has no sparsity pattern");
+    assertStreamPrint(kinsolUserData->threadData, pattern->nnz <= (unsigned int) SM_NNZ_S(Jac), "KINSOL sparse Jacobian capacity is too small");
+
+    for (column = 0; column <= kinsolData->size; column++) {
+      SM_INDEXPTRS_S(Jac)[column] = pattern->leadindex[column];
     }
-    x[i] += delta_hh;
 
-    /* Evaluate Jacobian function */
-    nlsKinsolResiduals(vecX, kinsolData->fRes, kinsolUserData);
-
-    /* Calculate scaled difference quotient */
-    delta_hh = 1.0 / delta_hh;
-
-    for (j = 0; j < N; j++) {
-      if (kinsolData->nominalJac) {
-        SM_ELEMENT_D(Jac, j, i) = (fRes[j] - fx[j]) * delta_hh / xScaling[i];
-      } else {
-        SM_ELEMENT_D(Jac, j, i) =
-            (fRes[j] - fx[j]) * delta_hh; /* TODO: Or now Jac(i,j) ??? */
-      }
+    for (nz = 0; nz < pattern->nnz; nz++) {
+      SM_INDEXVALS_S(Jac)[nz] = pattern->index[nz];
     }
-    x[i] = xsave;
+
+    finishSparseColPtr(Jac, pattern->nnz);
   }
 
-  /* debug */
+  nlsData->numberOfJEval++;
+
   if (OMC_ACTIVE_STREAM(OMC_LOG_NLS_JAC)) {
-    infoStreamPrint(OMC_LOG_NLS_JAC, 1, "KINSOL: Dense matrix.");
-    SUNDenseMatrix_Print(Jac, stdout); /* TODO: Print in OMC_LOG_NLS_JAC */
-    nlsKinsolJacSumDense(Jac);
+    infoStreamPrint(OMC_LOG_NLS_JAC, 1, "KINSOL: scaled %s Jacobian.", sparse ? "sparse" : "dense");
+    if (sparse) {
+      SUNSparseMatrix_Print(Jac, stdout);
+      nlsKinsolJacSumSparse(Jac);
+    } else {
+      SUNDenseMatrix_Print(Jac, stdout);
+      nlsKinsolJacSumDense(Jac);
+    }
     messageClose(OMC_LOG_NLS_JAC);
   }
 
-  /* performance measurement and statistics */
-  nlsData->jacobianTime += rt_ext_tp_tock(&(nlsData->jacobianTimeClock));
-  nlsData->numberOfJEval++;
+  if (sparse && omc_useStream[OMC_LOG_NLS_DERIVATIVE_TEST]) {
+    nlsKinsolDenseDerivativeTest(data, nlsData, kinsolData, NV_DATA_S(vecX), Jac, KINSOL_JAC_EVAL);
+  }
+  if (sparse && omc_useStream[OMC_LOG_NLS_JAC_SUMS]) {
+    nlsJacobianRowColSums(data, nlsData, Jac, KINSOL_JAC_EVAL, TRUE);
+  }
+  if (omc_useStream[OMC_LOG_NLS_SVD] || omc_useStream[OMC_LOG_NLS_SVD_V]) {
+    svd_compute(data, nlsData, sparse ? SM_DATA_S(Jac) : SM_DATA_D(Jac), sparse ? pattern : NULL, TRUE, KINSOL_JAC_EVAL);
+  }
 
   return 0;
 }
@@ -417,7 +351,7 @@ static int nlsDenseJac(long int N,
  * @brief Finish sparse matrix by fixing colprts.
  *
  * Last value of indexptrs should always be nnz.
- * Search for empty rows which would mean the matrix is singular.
+ * Search for empty columns which would mean the matrix is singular.
  *
  * @param A   CSC matrix
  */
@@ -433,11 +367,11 @@ static void finishSparseColPtr(SUNMatrix A, int nnz) {
   /* Set last value of indexptrs to nnz */
   SM_INDEXPTRS_S(A)[SM_COLUMNS_S(A)] = nnz;
 
-  /* Check for empty rows */
-  for (i = 1; i < SM_COLUMNS_S(A) + 1; ++i) {
+  /* Check for empty columns */
+  for (i = 1; i < SM_COLUMNS_S(A) + 1; i++) {
     if (SM_INDEXPTRS_S(A)[i] == SM_INDEXPTRS_S(A)[i - 1]) {
       warningStreamPrint(OMC_LOG_STDOUT, 0,
-                         "KINSOL: Jacobian row %d singular. See OMC_LOG_NLS for "
+                         "KINSOL: Jacobian column %d singular. See OMC_LOG_NLS for "
                          "more information.",
                          i);
       SM_INDEXPTRS_S(A)[i] = SM_INDEXPTRS_S(A)[i - 1];
@@ -445,29 +379,26 @@ static void finishSparseColPtr(SUNMatrix A, int nnz) {
   }
 }
 
-// TODO: unify this up to a generic level, such that we can use this from pretty much every solver and
-// it does not take kinsolData and the matrix only as flat buffer + SPARSE_PATTERN
-
 /**
  * @brief Perform derivative test comparing symbolic and numerical Jacobians for KINSOL
  *
  * Compares the symbolic Jacobian (sparse CSC format) with a numerically approximated
  * dense Jacobian, checking for numerical and structural anomalies. The numerical
- * Jacobian is computed using finite differences via nlsDenseJac.
+ * Jacobian is computed through the common nonlinear Jacobian API.
  *
  * @param data              Runtime data structure
  * @param nlsData           Nonlinear system data
  * @param kinsolData        KINSOL solver data structure
+ * @param x                 Current solver-coordinate iterate
  * @param Jsym              Symbolic Jacobian in sparse CSC format
- * @param tol               Tolerance, all relative errors above tol are considered anomalies
- * @param newJac            TRUE if called from jacobian evaluation, FALSE if called from solver entry point
+ * @param caller            Location from which the test was requested
  *
  * @return int              1 derivative test failed and no error
  *                          0 derivative test successful and no error
  *                         -1 internal error
  */
-static int nlsKinsolDenseDerivativeTest(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData,
-                                        NLS_KINSOL_DATA *kinsolData, SUNMatrix Jsym, SolverCaller caller)
+static int nlsKinsolDenseDerivativeTest(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData, NLS_KINSOL_DATA *kinsolData,
+                                        const modelica_real *x, SUNMatrix Jsym, SolverCaller caller)
 {
   int row, col, nz, numericalErrorCount, structuralErrorCount;
   const int size = nlsData->size;
@@ -486,35 +417,22 @@ static int nlsKinsolDenseDerivativeTest(DATA *data, NONLINEAR_SYSTEM_DATA *nlsDa
   sunindextype *rowIndices = SM_INDEXVALS_S(Jsym);
   sunrealtype *symValues = SM_DATA_S(Jsym);
 
-  // allocate temporary memory for dense finite-diff matrix
-  N_Vector vecX = N_VNew_Serial(size, kinsolData->sunctx);
-  N_Vector vecFX = N_VNew_Serial(size, kinsolData->sunctx);
-  N_Vector tmp1 = N_VNew_Serial(size, kinsolData->sunctx);
-  N_Vector tmp2 = N_VNew_Serial(size, kinsolData->sunctx);
   SUNMatrix Jnum = SUNDenseMatrix(size, size, kinsolData->sunctx);
 
   // set tolerances
   modelica_real Atol = omc_flag[FLAG_NLS_JAC_TEST_ATOL] ? atof(omc_flagValue[FLAG_NLS_JAC_TEST_ATOL]) : 100 * DBL_EPSILON;
   modelica_real Rtol = omc_flag[FLAG_NLS_JAC_TEST_RTOL] ? atof(omc_flagValue[FLAG_NLS_JAC_TEST_RTOL]) : 1e-4;
 
-  // copy current x into new vector, compute f(x) and corresponding dense finite-diff Jacobian
+  // Compute the finite-difference Jacobian at the current iterate.
   SUNMatZero(Jnum);
-  N_VScale(1.0, kinsolData->initialGuess, vecX);
-  nlsKinsolResiduals(vecX, vecFX, kinsolData->userData);
-  if (nlsDenseJac(size, vecX, vecFX, Jnum, kinsolData->userData, tmp1, tmp2) != 0)
-  {
-    errorStreamPrint(OMC_LOG_STDOUT, 0, "Numerical Jacobian computation failed in nlsKinsolDenseDerivativeTest");
-    ret = -1;
+  const int jacobianResult = nlsJacobian(kinsolData->userData, x, SM_DATA_D(Jnum), FALSE, NLS_JACOBIAN_NUMERICAL);
+  if (jacobianResult) {
     SUNMatDestroy(Jnum);
-    N_VDestroy_Serial(vecX);
-    N_VDestroy_Serial(vecFX);
-    N_VDestroy_Serial(tmp1);
-    N_VDestroy_Serial(tmp2);
-    return ret;
+    return -1;
   }
 
-  infoStreamPrint(OMC_LOG_NLS_DERIVATIVE_TEST, 1, "%s: Derivative test (atol=%.5e, rtol=%.5e, scaled = %s, Caller: %s):",
-                  SolverCaller_callerString(caller), Atol, Rtol, kinsolData->nominalJac ? "true" : "false", SolverCaller_toString(caller));
+  infoStreamPrint(OMC_LOG_NLS_DERIVATIVE_TEST, 1, "%s: Derivative test (atol=%.5e, rtol=%.5e, scaled, Caller: %s):",
+                  SolverCaller_callerString(caller), Atol, Rtol, SolverCaller_toString(caller));
   infoStreamPrint(OMC_LOG_NLS_DERIVATIVE_TEST, 1, "Matrix Info");
   infoStreamPrint(OMC_LOG_NLS_DERIVATIVE_TEST, 0, "NLS index = " OMC_INT_FORMAT, nlsData->equationIndex);
   infoStreamPrint(OMC_LOG_NLS_DERIVATIVE_TEST, 0, "Columns   = " OMC_INT_FORMAT, columns);
@@ -604,220 +522,10 @@ static int nlsKinsolDenseDerivativeTest(DATA *data, NONLINEAR_SYSTEM_DATA *nlsDa
   messageClose(OMC_LOG_NLS_DERIVATIVE_TEST);
 
   SUNMatDestroy(Jnum);
-  N_VDestroy_Serial(vecX);
-  N_VDestroy_Serial(vecFX);
-  N_VDestroy_Serial(tmp1);
-  N_VDestroy_Serial(tmp2);
 
   messageClose(OMC_LOG_NLS_DERIVATIVE_TEST);
 
   return ret;
-}
-
-/**
- * @brief Computes symbolic Jacobian matrix Jac(vecX)
- *
- * @param vecX
- * @param vecFX     just for interface compatibility, will not be used here
- * @param Jac       Allocated Jacobian, contains symbolic Jacobian on exit
- * @param userData  Void pointer to user data of type NLS_USERDATA*.
- * @param tmp1      Unused, only to match interface of KINLsJacFn
- * @param tmp2      Unused, only to match interface of KINLsJacFn
- * @return int
- */
-int nlsSparseSymJac(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac,
-                    void *userData, N_Vector tmp1, N_Vector tmp2) {
-  /* Variables */
-  NLS_USERDATA* kinsolUserData = (NLS_USERDATA *)userData;;
-  DATA* data = kinsolUserData->data;
-  threadData_t* threadData = kinsolUserData->threadData;
-  NONLINEAR_SYSTEM_DATA* nlsData = kinsolUserData->nlsData;
-  NLS_KINSOL_DATA* kinsolData = (NLS_KINSOL_DATA *)nlsData->solverData;
-  JACOBIAN* jacobian = kinsolUserData->analyticJacobian;
-  assertStreamPrint(threadData, NULL != jacobian, "jacobian is NULL");
-  const SPARSE_PATTERN* sp = jacobian->sparsePattern;
-  assertStreamPrint(threadData, NULL != sp, "sp is NULL");
-  double *xScaling = NV_DATA_S(kinsolData->xScale);
-  long int column, nz;
-
-  if (SUNMatGetID(Jac) != SUNMATRIX_SPARSE || SM_SPARSETYPE_S(Jac) == SUN_CSR_MAT) {
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: nlsSparseJac illegal input Jac. Matrix is not sparse!");
-    return -1;
-  }
-
-  /* performance measurement */
-  rt_ext_tp_tick(&nlsData->jacobianTimeClock);
-
-  /* call generic sparse Jacobian with CSC buffer "SM_DATA_S(Jac)" */
-  evalJacobian(data, threadData, jacobian, NULL, SM_DATA_S(Jac), FALSE);
-  setSundialsSparsePattern(jacobian, Jac);
-
-  /* scaling */
-  if (kinsolData->nominalJac) {
-    for (column = 0; column < jacobian->sizeCols; column++) {
-      for (nz = sp->leadindex[column]; nz < sp->leadindex[column + 1]; nz++) {
-        SM_DATA_S(Jac)[nz] /= xScaling[column];
-      }
-    }
-  }
-
-  /* Finish sparse matrix and do a cheap check for singularity */
-  finishSparseColPtr(Jac, sp->nnz);
-
-  /* Debug print */
-  if (OMC_ACTIVE_STREAM(OMC_LOG_NLS_JAC)) {
-    infoStreamPrint(OMC_LOG_NLS_JAC, 1, "KINSOL: Sparse Matrix.");
-    SUNSparseMatrix_Print(Jac, stdout); /* TODO: Print in OMC_LOG_NLS_JAC */
-    nlsKinsolJacSumSparse(Jac);
-    messageClose(OMC_LOG_NLS_JAC);
-  }
-
-  if (omc_useStream[OMC_LOG_NLS_DERIVATIVE_TEST])
-  {
-    nlsKinsolDenseDerivativeTest(data, nlsData, kinsolData, Jac, KINSOL_JAC_EVAL);
-  }
-
-  if (omc_useStream[OMC_LOG_NLS_JAC_SUMS])
-  {
-    nlsJacobianRowColSums(data, nlsData, Jac, KINSOL_JAC_EVAL /* called at evaluation */, kinsolData->nominalJac /* scaled */);
-  }
-
-  /* performance measurement and statistics */
-  nlsData->jacobianTime += rt_ext_tp_tock(&(nlsData->jacobianTimeClock));
-  nlsData->numberOfJEval++;
-
-  return 0;
-}
-
-/**
- * @brief Colored numeric Jacobian evaluation.
- *
- * Finite differences while using coloring of Jacobian.
- * Jacobian matrix format has to be compressed sparse columns (CSC).
- *
- * @param vecX      Input vector x.
- * @param vecFX     Vector for residual evaluation: f(x)
- * @param Jac       Jacobian to calculate: J(x)
- * @param userData  Pointer to user data, tpyecasted to `NLS_USERDATA`.
- * @param tmp1      Work vector.
- * @param tmp2      Work vector.
- * @return int      Return 0 on success.
- */
-static int nlsSparseJac(N_Vector vecX, N_Vector vecFX, SUNMatrix Jac,
-                        void *userData, N_Vector tmp1, N_Vector tmp2) {
-  /* Variables */
-  NLS_USERDATA *kinsolUserData;
-  DATA *data;
-  NONLINEAR_SYSTEM_DATA *nlsData;
-  NLS_KINSOL_DATA *kinsolData;
-  SPARSE_PATTERN *sparsePattern;
-
-  if (SUNMatGetID(Jac) != SUNMATRIX_SPARSE || SM_SPARSETYPE_S(Jac) == SUN_CSR_MAT) {
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: nlsSparseJac illegal input Jac. Matrix is not sparse!");
-    return -1;
-  }
-
-  double *x;
-  double *fx;
-  double *xsave;
-  double *delta_hh;
-  double *xScaling;
-  double *fRes;
-
-  const double delta_h = sqrt(DBL_EPSILON * 2e1);
-
-  long int i, j, ii;
-  int nth;
-
-  /* Access userData and nonlinear system data */
-  kinsolUserData = (NLS_USERDATA *)userData;
-  data = kinsolUserData->data;
-  nlsData = kinsolUserData->nlsData;
-  kinsolData = (NLS_KINSOL_DATA *)nlsData->solverData;
-  sparsePattern = nlsData->sparsePattern;
-
-  /* Access N_Vector variables */
-  x = N_VGetArrayPointer(vecX);
-  fx = N_VGetArrayPointer(vecFX);
-  xsave = N_VGetArrayPointer(tmp1);
-  delta_hh = N_VGetArrayPointer(tmp2);
-  xScaling = NV_DATA_S(kinsolData->xScale);
-  fRes = NV_DATA_S(kinsolData->fRes);
-
-  nth = 0;
-
-  /* performance measurement */
-  rt_ext_tp_tick(&nlsData->jacobianTimeClock);
-
-  /* reset matrix */
-  SUNMatZero(Jac);
-
-  /* Approximate Jacobian */
-  for (i = 0; i < sparsePattern->maxColors; i++) {
-    for (ii = 0; ii < kinsolData->size; ii++) {
-      if (sparsePattern->colorCols[ii] - 1 == i) {
-        xsave[ii] = x[ii];
-        delta_hh[ii] = delta_h * (fabs(xsave[ii]) + 1.0);
-        if ((xsave[ii] + delta_hh[ii] >= nlsData->max[ii])) {
-          delta_hh[ii] *= -1;
-        }
-        x[ii] += delta_hh[ii];
-
-        /* Calculate scaled difference quotient */
-        delta_hh[ii] = 1. / delta_hh[ii];
-      }
-    }
-    /* Evaluate residual function */
-    nlsKinsolResiduals(vecX, kinsolData->fRes, userData);
-
-    /* Save column in Jac and unset seed variables */
-    for (ii = 0; ii < kinsolData->size; ii++) {
-      if (sparsePattern->colorCols[ii] - 1 == i) {
-        nth = sparsePattern->leadindex[ii];
-        while (nth < sparsePattern->leadindex[ii + 1]) {
-          j = sparsePattern->index[nth];
-          if (kinsolData->nominalJac) {
-            setJacElementSundialsSparse(j, ii, nth, (fRes[j] - fx[j]) * delta_hh[ii] / xScaling[ii], Jac, SM_CONTENT_S(Jac)->M);
-          } else {
-            setJacElementSundialsSparse(j, ii, nth, (fRes[j] - fx[j]) * delta_hh[ii], Jac, SM_CONTENT_S(Jac)->M);
-          }
-          nth++;
-        }
-        x[ii] = xsave[ii];
-      }
-    }
-  }
-  /* Finish sparse matrix */
-  finishSparseColPtr(Jac, sparsePattern->nnz);
-
-  /* Debug print */
-  if (OMC_ACTIVE_STREAM(OMC_LOG_NLS_JAC)) {
-    infoStreamPrint(OMC_LOG_NLS_JAC, 1, "KINSOL: Sparse Matrix.");
-    SUNSparseMatrix_Print(Jac, stdout);
-    nlsKinsolJacSumSparse(Jac);
-    messageClose(OMC_LOG_NLS_JAC);
-  }
-  if (OMC_ACTIVE_STREAM(OMC_LOG_DEBUG)) {
-    sundialsPrintSparseMatrix(Jac, "A", OMC_LOG_JAC);
-  }
-
-  if (omc_useStream[OMC_LOG_NLS_DERIVATIVE_TEST])
-  {
-    nlsKinsolDenseDerivativeTest(data, nlsData, kinsolData, Jac, KINSOL_JAC_EVAL);
-  }
-
-  if (omc_useStream[OMC_LOG_NLS_JAC_SUMS])
-  {
-    nlsJacobianRowColSums(data, nlsData, Jac, KINSOL_JAC_EVAL, kinsolData->nominalJac /* scaled */);
-  }
-
-  /* performance measurement and statistics */
-  nlsData->jacobianTime += rt_ext_tp_tock(&(nlsData->jacobianTimeClock));
-  nlsData->numberOfJEval++;
-
-  return 0;
 }
 
 /**
@@ -891,19 +599,17 @@ static void nlsKinsolJacSumSparse(SUNMatrix A) {
 /**
  * @brief Set maximum scaled length of Newton step.
  *
- * Will be set to the weighted Euclidean l_2 norm of xScale with maxstepfactor
- * as weights. maxStep = sqrt(sum_{1=0}^{n-1} (xScale[i]*maxstepfactor)^2)
+ * The KINSOL scaling vector is unity because the problem is already expressed
+ * in common NLS solver coordinates.
  *
  * @param kinsolData
  * @param maxstepfactor
  */
-static void nlsKinsolSetMaxNewtonStep(NLS_KINSOL_DATA *kinsolData,
-                                      double maxstepfactor) {
+static void nlsKinsolSetMaxNewtonStep(NLS_KINSOL_DATA *kinsolData, double maxstepfactor) {
   /* Variables */
   int flag;
 
-  N_VConst(maxstepfactor, kinsolData->fTmp);
-  kinsolData->mxnstepin = N_VWL2Norm(kinsolData->xScale, kinsolData->fTmp);
+  kinsolData->mxnstepin = sqrt((double) kinsolData->size) * maxstepfactor;
 
   /* Set maximum step size */
   flag = KINSetMaxNewtonStep(kinsolData->kinsolMemory, kinsolData->mxnstepin);
@@ -922,177 +628,25 @@ static void nlsKinsolSetMaxNewtonStep(NLS_KINSOL_DATA *kinsolData,
  * @param mode          Has to be `INITIAL_EXTRAPOLATION` for extrapolation or
  * `INITIAL_OLDVALUES` for using old values.
  */
-static void nlsKinsolResetInitial(DATA *data, NLS_KINSOL_DATA *kinsolData,
-                                  NONLINEAR_SYSTEM_DATA *nlsData,
+static void nlsKinsolResetInitial(DATA *data, NLS_KINSOL_DATA *kinsolData, NONLINEAR_SYSTEM_DATA *nlsData,
                                   initialMode mode) {
+  NLS_SCALING_DATA *scaling = nlsData->scaling;
   double *xStart = NV_DATA_S(kinsolData->initialGuess);
+  const double *xSource;
 
-  /* Set x vector */
   switch (mode) {
   case INITIAL_EXTRAPOLATION:
-    if (data->simulationInfo->discreteCall) {
-      memcpy(xStart, nlsData->nlsx, nlsData->size * (sizeof(double)));
-    } else {
-      memcpy(xStart, nlsData->nlsxExtrapolation,
-             nlsData->size * (sizeof(double)));
-    }
+    xSource = data->simulationInfo->discreteCall ? scaling->z : scaling->zExtrapolation;
     break;
   case INITIAL_OLDVALUES:
-    memcpy(xStart, nlsData->nlsxOld, nlsData->size * (sizeof(double)));
+    xSource = scaling->zOld;
     break;
   default:
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: Function nlsKinsolResetInitial: Unknown mode %d.",
-                     (int)mode);
-  }
-}
-
-/**
- * @brief Scale x vector.
- *
- * Scale with 1.0 for mode `SCALING_ONES`.
- * Scale with 1/fmax(nominal,|xStart|) for mode `SCALING_NOMINALSTART`.
- *
- * @param data          unused
- * @param kinsolData
- * @param nlsData
- * @param mode          Mode for scaling. Use `SCALING_NOMINALSTART` for nominal
- *                      scaling and `SCALING_ONES` for no scaling. Will be
- *                      overwritten by simulation flag `FLAG_NO_SCALING`.
- */
-static void nlsKinsolXScaling(DATA *data, NLS_KINSOL_DATA *kinsolData,
-                              NONLINEAR_SYSTEM_DATA *nlsData,
-                              scalingMode mode) {
-  double *xStart = NV_DATA_S(kinsolData->initialGuess);
-  double *xScaling = NV_DATA_S(kinsolData->xScale);
-  int i;
-
-  /* if noScaling flag is used overwrite mode */
-  if (omc_flag[FLAG_NO_SCALING]) {
-    mode = SCALING_ONES;
+    throwStreamPrint(kinsolData->userData->threadData, "KINSOL: Unknown initial-guess mode %d", (int) mode);
+    return;
   }
 
-  /* Use nominal value or the actual working point for scaling */
-  switch (mode) {
-  case SCALING_NOMINALSTART:
-    for (i = 0; i < nlsData->size; i++) {
-      xScaling[i] = 1.0 / fmax(nlsData->nominal[i], fabs(xStart[i]));
-    }
-    break;
-  case SCALING_ONES:
-    for (i = 0; i < nlsData->size; i++) {
-      xScaling[i] = 1.0;
-    }
-    break;
-  case SCALING_JACOBIAN:
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: Function nlsKinsolXScaling: Invalid mode SCALING_JACOBIAN.");
-  default:
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: Function nlsKinsolXScaling: Unknown mode %d.", (int)mode);
-  }
-}
-
-/**
- * @brief Scale f(x) vector.
- *
- * @param data
- * @param kinsolData
- * @param nlsData
- * @param mode
- */
-static void nlsKinsolFScaling(DATA *data, NLS_KINSOL_DATA *kinsolData,
-                              NONLINEAR_SYSTEM_DATA *nlsData,
-                              scalingMode mode) {
-  double *fScaling = NV_DATA_S(kinsolData->fScale);
-  N_Vector x = kinsolData->initialGuess;
-
-  int i, j;
-  SUNErrCode ret;
-
-  /* If noScaling flag is used overwrite mode */
-  if (omc_flag[FLAG_NO_SCALING]) {
-    mode = SCALING_ONES;
-  }
-
-  /* Use nominal value or the actual working point for scaling */
-  switch (mode) {
-  case SCALING_JACOBIAN:
-    /* Enable scaled jacobian evaluation */
-    kinsolData->nominalJac = 1;
-
-    /* Calculate the scaled Jacobian */
-    if (nlsData->sparsePattern && kinsolData->linearSolverMethod == NLS_LS_KLU) {
-      if (kinsolData->solved != NLS_SOLVED) {
-        kinsolData->nominalJac = 0;
-        if (nlsData->analyticalJacobianColumn != NULL) {
-          /* Calculate the sparse Jacobian symbolically  */
-          nlsSparseSymJac(x, kinsolData->fTmp, kinsolData->J, kinsolData->userData, NULL, NULL);
-        } else {
-          /* Update f(x) for the numerical jacobian matrix */
-          nlsKinsolResiduals(x, kinsolData->fTmp, kinsolData->userData);
-          nlsSparseJac(x, kinsolData->fTmp, kinsolData->J, kinsolData->userData, kinsolData->tmp1, kinsolData->tmp2);
-        }
-      }
-      /* Scale the current Jacobian */
-      SUNMatCopy_Sparse(kinsolData->J, kinsolData->scaledJ);  /* Copy J into scaledJ */
-      ret = _omc_SUNSparseMatrixVecScaling(kinsolData->scaledJ, kinsolData->xScale);
-      if (ret != SUN_SUCCESS) {
-        errorStreamPrint(OMC_LOG_STDOUT, 0, "KINSOL: _omc_SUNSparseMatrixVecScaling failed.");
-      }
-    } else {
-      /* Update f(x) for the numerical jacobian matrix */
-      nlsKinsolResiduals(x, kinsolData->fTmp, kinsolData->userData);
-      nlsDenseJac(nlsData->size, x, kinsolData->fTmp, kinsolData->J,
-                  kinsolData->userData, NULL, NULL);
-    }
-
-    /* Disable scaled Jacobian evaluation */
-    kinsolData->nominalJac = 0;
-
-    for (i = 0; i < nlsData->size; i++) {
-      fScaling[i] = 1e-12;
-    }
-
-    switch (SUNMatGetID(kinsolData->J))
-    {
-    case SUNMATRIX_SPARSE:
-      for (i = 0; i < SM_NNZ_S(kinsolData->scaledJ); ++i) {
-        if (fScaling[SM_INDEXVALS_S(kinsolData->scaledJ)[i]] < fabs(SM_DATA_S(kinsolData->scaledJ)[i])) {
-          fScaling[SM_INDEXVALS_S(kinsolData->scaledJ)[i]] = fabs(SM_DATA_S(kinsolData->scaledJ)[i]);
-        }
-      }
-      break;
-    case SUNMATRIX_DENSE:
-      for (i = 0; i < nlsData->size; i++) {
-        for (j = 0; j < nlsData->size; j++) {
-          if (fScaling[i] < fabs(SM_ELEMENT_D(kinsolData->J, j, i))) {
-            fScaling[i] = fabs(SM_ELEMENT_D(kinsolData->J, j, i));
-          }
-        }
-      }
-      break;
-    default:
-      errorStreamPrint(OMC_LOG_STDOUT, 0,
-                       "KINSOL: Function nlsKinsolFScaling: Unknown matrix type.");
-    }
-
-    /* inverse fScale */
-    N_VInv(kinsolData->fScale, kinsolData->fScale);
-
-    break;
-  case SCALING_ONES:
-    for (i = 0; i < nlsData->size; i++) {
-      fScaling[i] = 1.0;
-    }
-    break;
-  case SCALING_NOMINALSTART:
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: Function nlsKinsolFScaling: Invalid mode SCALING_NOMINALSTART.");
-  default:
-    errorStreamPrint(OMC_LOG_STDOUT, 0,
-                     "KINSOL: Function nlsKinsolFScaling: Unknown mode %d.", (int)mode);
-  }
+  memcpy(xStart, xSource, kinsolData->size * sizeof(double));
 }
 
 /**
@@ -1101,50 +655,18 @@ static void nlsKinsolFScaling(DATA *data, NLS_KINSOL_DATA *kinsolData,
  * Only prints if stream `LOG_NLS_V` is active.
  *
  * @param kinsolData
- * @param nlsData
  */
-static void nlsKinsolConfigPrint(NLS_KINSOL_DATA *kinsolData,
-                                 NONLINEAR_SYSTEM_DATA *nlsData) {
-  int retValue;
-  double fNorm;
-  DATA *data = kinsolData->userData->data;
-  int eqSystemNumber = nlsData->equationIndex;
-  _omc_vector vecStart, vecXScaling, vecFScaling;
+static void nlsKinsolConfigPrint(NLS_KINSOL_DATA *kinsolData) {
+  nlsPrintInitialGuess(kinsolData->userData, NV_DATA_S(kinsolData->initialGuess), kinsolData->size, OMC_LOG_NLS_V);
+  nlsPrintScaleFactors(kinsolData->userData, kinsolData->size, OMC_LOG_NLS_V);
 
-  if (!omc_useStream[OMC_LOG_NLS_V]) {
-    return;
-  }
-
-  _omc_initVector(&vecStart, kinsolData->size,
-                  NV_DATA_S(kinsolData->initialGuess));
-  _omc_initVector(&vecXScaling, kinsolData->size,
-                  NV_DATA_S(kinsolData->xScale));
-  _omc_initVector(&vecFScaling, kinsolData->size,
-                  NV_DATA_S(kinsolData->fScale));
-
-  if (eqSystemNumber>0) {
-    _omc_printVectorWithEquationInfo(
-      &vecStart, "Initial guess values", OMC_LOG_NLS_V,
-      modelInfoGetEquation(&data->modelData->modelDataXml, eqSystemNumber));
-
-    _omc_printVectorWithEquationInfo(
-      &vecXScaling, "xScaling", OMC_LOG_NLS_V,
-      modelInfoGetEquation(&data->modelData->modelDataXml, eqSystemNumber));
-  }
-
-  _omc_printVector(&vecFScaling, "fScaling", OMC_LOG_NLS_V);
-
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL F tolerance: %g", kinsolData->fnormtol);
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL minimal step size %g",
-                  kinsolData->scsteptol);
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL max iterations %d",
-                  20 * kinsolData->size);
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL strategy %d",
-                  kinsolData->kinsolStrategy);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL scaled-residual tolerance: %g", kinsolData->fnormtol);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL scaled-step tolerance: %g", kinsolData->scsteptol);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL max iterations %d", 100 * kinsolData->size);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL strategy %d", kinsolData->kinsolStrategy);
   infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL current retry %d", kinsolData->retries);
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL max step %g", kinsolData->mxnstepin);
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL linear solver %d",
-                  kinsolData->linearSolverMethod);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL max scaled step %g", kinsolData->mxnstepin);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL linear solver %d", kinsolData->linearSolverMethod);
 }
 
 /**
@@ -1162,8 +684,6 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
   int flag;             /* KIN_* and KINLS_* codes, which are plain macros */
   SUNErrCode sunFlag;   /* SUNLinearSolver codes, which are not */
   double fNorm;
-  double *xStart = NV_DATA_S(kinsolData->initialGuess);
-  double *xScaling = NV_DATA_S(kinsolData->xScale);
   long outL;
 
   flag = KINSetNoInitSetup(kinsolData->kinsolMemory, SUNFALSE);
@@ -1205,8 +725,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
   case KIN_LSOLVE_FAIL:
     warningStreamPrint(OMC_LOG_NLS_V, 0,
                        "KINSOL: Matrix need new factorization. Try again.\n");
-    if (kinsolData->linearSolverMethod == NLS_LS_KLU &&
-        nlsData->sparsePattern) {
+    if (kinsolData->linearSolverMethod == NLS_LS_KLU && nlsJacobianPattern(kinsolData->userData)) {
       /* Complete symbolic and numeric factorizations */
       sunFlag = SUNLinSol_KLUReInit(kinsolData->linSol, kinsolData->J,
                                     kinsolData->nnz, SUNKLU_REINIT_PARTIAL);
@@ -1228,18 +747,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
     warningStreamPrint(OMC_LOG_NLS_V, 0,
                        "KINSOL: The kinls setup routine (lsetup) encountered an error. "
                        "Retry with numerical Jacobian.\n");
-    if (kinsolData->linearSolverMethod == NLS_LS_KLU) {
-      if (nlsData->sparsePattern && nlsData->analyticalJacobianColumn != NULL) {
-        flag = KINSetJacFn(kinsolData->kinsolMemory, nlsSparseJac);
-        checkReturnFlag_SUNDIALS(flag, SUNDIALS_KINLS_FLAG, "KINSetJacFn");
-        if (flag < 0) {
-          return FALSE;
-        }
-      } else {
-        errorStreamPrint(OMC_LOG_STDOUT, 0, "KINSOL: Trying to switch to numeric Jacobian for sparse solver KLU, but no sparsity pattern is available.");
-        return FALSE;
-      }
-    }
+    kinsolData->jacobianMethod = NLS_JACOBIAN_NUMERICAL;
     break;
   case KIN_LINESEARCH_BCFAIL:
     KINGetNumBetaCondFails(kinsolData->kinsolMemory, &outL);
@@ -1264,38 +772,32 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
     kinsolData->resetTol = TRUE;
     return TRUE;
   } else {
-    warningStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL: Current status of fx = %f", fNorm);
+    warningStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL: Current scaled residual norm = %f", fNorm);
   }
 
   /* reconfigure kinsol for another try */
   switch (kinsolData->retries) {
   case 0:
-    /* try without scaling  */
-    nlsKinsolXScaling(data, kinsolData, nlsData, SCALING_ONES);
-    nlsKinsolFScaling(data, kinsolData, nlsData, SCALING_ONES);
+    /* Retry the current iterate with a fresh setup. */
     break;
   case 1:
-    /* try without line-search and oldValues */
+    /* Retry line search from old values. */
     nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
     kinsolData->kinsolStrategy = KIN_LINESEARCH;
     break;
   case 2:
-    /* try without line-search and oldValues */
+    /* Retry without line search from the extrapolated point. */
     nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
     kinsolData->kinsolStrategy = KIN_NONE;
     break;
   case 3:
-    /* try with exact newton  */
-    nlsKinsolXScaling(data, kinsolData, nlsData, SCALING_NOMINALSTART);
-    nlsKinsolFScaling(data, kinsolData, nlsData, SCALING_JACOBIAN);
+    /* Retry exact Newton from the extrapolated point. */
     nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
     KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
     kinsolData->kinsolStrategy = KIN_LINESEARCH;
     break;
   case 4:
-    /* try with exact newton to with out x scaling values */
-    nlsKinsolXScaling(data, kinsolData, nlsData, SCALING_ONES);
-    nlsKinsolFScaling(data, kinsolData, nlsData, SCALING_ONES);
+    /* Retry exact Newton from old values. */
     nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
     KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
     kinsolData->kinsolStrategy = KIN_LINESEARCH;
@@ -1320,6 +822,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
 NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR_SYSTEM_DATA* nlsData) {
 
   NLS_KINSOL_DATA *kinsolData = (NLS_KINSOL_DATA *)nlsData->solverData;
+  NLS_SCALING_DATA *scaling = nlsData->scaling;
   int eqSystemNumber = nlsData->equationIndex;
   int indexes[2] = {1, eqSystemNumber};
 
@@ -1327,58 +830,27 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
   long nFEval;
   modelica_boolean success = FALSE;
   modelica_boolean retry = TRUE;
-  NLS_SOLVER_STATUS solver_status;
   double *xStart = NV_DATA_S(kinsolData->initialGuess);
-  double fNormValue;
 
   infoStreamPrintWithEquationIndexes(OMC_LOG_NLS_V, omc_dummyFileInfo, 1, indexes,
     "Start solving Non-Linear System %d (size %d) at time %g with Kinsol Solver",
     eqSystemNumber, (int) nlsData->size, data->localData[0]->timeValue);
 
+  nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
+  nlsKinsolSetMaxNewtonStep(kinsolData, kinsolData->maxstepfactor);
+  kinsolData->jacobianMethod = NLS_JACOBIAN_AUTO;
+
   /* Solve nonlinear system with KINSol() */
   kinsolData->retries = 0;
   do {
-    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
-
-    /* Set x scaling */
-    nlsKinsolXScaling(data, kinsolData, nlsData, SCALING_NOMINALSTART);
-
-    /* Set f scaling */
-    nlsKinsolFScaling(data, kinsolData, nlsData, SCALING_JACOBIAN);
-
-    /* Set maximum step size */
-    nlsKinsolSetMaxNewtonStep(kinsolData, kinsolData->maxstepfactor);
-
     /* Dump configuration */
-    nlsKinsolConfigPrint(kinsolData, nlsData);
+    nlsKinsolConfigPrint(kinsolData);
 
-    /* TODO: This should be another flag, e.g. LOG_NLS_JAC_UPDATE and not OMC_LOG_NLS_DERIVATIVE_TEST
-             only in some cases this derivative test makes sense, since the scaled Jacobian is outdated frequently!
-             in most cases, we use an outdated jacobian here, such that errors explode and it detects wrong Jacobian mismatches
-             that are due to the dense Jacobian evaluated at the new point x_new.
-
-    if (omc_useStream[OMC_LOG_NLS_DERIVATIVE_TEST])
-    {
-      nlsKinsolDenseDerivativeTest(data, nlsData, kinsolData, kinsolData->J, KINSOL_ENTRY_POINT);
-    }
-    */
-
-    if (omc_useStream[OMC_LOG_NLS_JAC_SUMS])
-    {
-      nlsJacobianRowColSums(data, nlsData, kinsolData->J, KINSOL_ENTRY_POINT /* called at entry point */, kinsolData->nominalJac /* scaled */);
-    }
-
-    if (omc_useStream[OMC_LOG_NLS_SVD] || omc_useStream[OMC_LOG_NLS_SVD_V])
-    {
-      svd_compute(data, nlsData, SM_DATA_S(kinsolData->J), FALSE /* scaled */, KINSOL_ENTRY_POINT /* called at entry point */);
-    }
-
-    flag = KINSol(
-        kinsolData->kinsolMemory,   /* KINSol memory block */
-        kinsolData->initialGuess,   /* initial guess on input; solution vector */
-        kinsolData->kinsolStrategy, /* global strategy choice */
-        kinsolData->xScale,         /* scaling vector, for the variable cc */
-        kinsolData->fScale);        /* scaling vector for function values fval */
+    flag = KINSol(kinsolData->kinsolMemory,    /* KINSol memory block */
+                  kinsolData->initialGuess,    /* initial guess on input; solution vector */
+                  kinsolData->kinsolStrategy,  /* global strategy choice */
+                  kinsolData->scale,           /* native KINSOL variable scaling (unity) */
+                  kinsolData->scale);          /* native KINSOL residual scaling (unity) */
 
     if (flag < 0 && kinsolData->attemptRetry) {
       warningStreamPrint(OMC_LOG_NLS, 0, "KINSol finished with errorCode %d.", flag);
@@ -1422,7 +894,7 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
   }
 
   if (success) {
-    memcpy(nlsData->nlsx, xStart, nlsData->size * (sizeof(double)));
+    memcpy(scaling->z, xStart, kinsolData->size * sizeof(double));
   }
 
   messageClose(OMC_LOG_NLS_V);
@@ -1432,7 +904,7 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
 
 #else /* WITH_SUNDIALS */
 
-void* nlsKinsolAllocate(int size, void* userData, int attemptRetry, modelica_boolean isPatternAvailable) {
+void* nlsKinsolAllocate(int size, void* userData, int attemptRetry) {
 
   throwStreamPrint(NULL, "No sundials/kinsol support activated.");
   return 0;

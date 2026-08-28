@@ -45,22 +45,18 @@ extern "C" {
 typedef struct DATA_NEWTON
 {
   int initialized;      /** 1 = initialized, else = 0 */
-  double* resScaling;   /** Residual scaling vector */
-  double* fvecScaled;   /** scaled f vector */
 
   int newtonStrategy;
 
   int n;                /** size of equation system */
-  double* x;
-  double* fvec;
+  double* x;              /** scaled iteration variables */
+  double* fvec;           /** scaled residual vector */
   double xtol;
   double ftol;
   int nfev;
   int maxfev;
   int info;
-  double epsfcn;
-  double* fjac;           /** Jacobian matrix in row-major format */
-  double* rwork;
+  double* fjac;           /** scaled Jacobian matrix in column-major format */
   int* iwork;
   int calculate_jacobian;
   int factorization;

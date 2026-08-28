@@ -39,7 +39,6 @@
 #include "nonlinearValuesList.h"
 #if !defined(OMC_MINIMAL_RUNTIME)
 #include "kinsolSolver.h"
-#include "kinsol_b.h"
 #include "nonlinearSolverHybrd.h"
 #include "nonlinearSolverNewton.h"
 #include "newtonIteration.h"
@@ -57,6 +56,7 @@
 int check_nonlinear_solution(DATA *data, int printFailingSystems, int sysNumber);
 
 extern int init_lambda_steps;
+extern double enorm_(int *n, double *x);
 
 struct dataMixedSolver
 {
@@ -271,10 +271,9 @@ int print_csvLineIterStatsHeader(DATA* data, NONLINEAR_SYSTEM_DATA* systemData, 
  *  \param [ref] [csvData]
  *  \param [in] [size, num, ...]
  */
-int print_csvLineIterStats(void* voidCsvData, int size, int num,
-                           int iteration, double* x, double* f, double error_f,
-                           double error_fs, double delta_x, double delta_xs,
-                           double lambda)
+int print_csvLineIterStats(void *voidCsvData, NONLINEAR_SYSTEM_DATA *nlsData, int size, int num, int iteration,
+                           const double *z, const double *g, double deltaX, double deltaZ, double errorF,
+                           double errorG, double lambda)
 {
   OMC_WRITE_CSV* csvData = voidCsvData;
   char buffer[1024];
@@ -290,37 +289,37 @@ int print_csvLineIterStats(void* voidCsvData, int size, int num,
   omc_write_csv(csvData, buffer);
   fputc(csvData->seperator,csvData->handle);
 
-  /* x */
-  for(j=0; j<size; ++j) {
-    sprintf(buffer, "%g", x[j]);
+  /* physical x */
+  for(j=0; j<size; j++) {
+    sprintf(buffer, "%g", nlsScalingPhysicalX(nlsData, j, z[j]));
     omc_write_csv(csvData, buffer);
     fputc(csvData->seperator,csvData->handle);
   }
 
-  /* r */
-  for(j=0; j<size; ++j) {
-    sprintf(buffer, "%g", f[j]);
+  /* physical residual */
+  for(j=0; j<size; j++) {
+    sprintf(buffer, "%g", nlsScalingPhysicalResidual(nlsData, j, g[j]));
     omc_write_csv(csvData, buffer);
     fputc(csvData->seperator,csvData->handle);
   }
-
-  /* error_f */
-  sprintf(buffer, "%g", error_f);
-  omc_write_csv(csvData, buffer);
-  fputc(csvData->seperator,csvData->handle);
-
-  /* error_f */
-  sprintf(buffer, "%g", error_fs);
-  omc_write_csv(csvData, buffer);
-  fputc(csvData->seperator,csvData->handle);
 
   /* delta_x */
-  sprintf(buffer, "%g", delta_x);
+  sprintf(buffer, "%g", deltaX);
   omc_write_csv(csvData, buffer);
   fputc(csvData->seperator,csvData->handle);
 
-  /* delta_xs */
-  sprintf(buffer, "%g", delta_xs);
+  /* delta_x_scaled */
+  sprintf(buffer, "%g", deltaZ);
+  omc_write_csv(csvData, buffer);
+  fputc(csvData->seperator,csvData->handle);
+
+  /* error_f */
+  sprintf(buffer, "%g", errorF);
+  omc_write_csv(csvData, buffer);
+  fputc(csvData->seperator,csvData->handle);
+
+  /* error_f_scaled */
+  sprintf(buffer, "%g", errorG);
   omc_write_csv(csvData, buffer);
   fputc(csvData->seperator,csvData->handle);
 
@@ -334,6 +333,77 @@ int print_csvLineIterStats(void* voidCsvData, int size, int num,
   return 0;
 }
 #endif
+
+static const char *nlsVariableName(const NLS_USERDATA *userData, int index)
+{
+  const NONLINEAR_SYSTEM_DATA *nlsData = userData->nlsData;
+  if (nlsData->equationIndex >= 0) {
+    const EQUATION_INFO equation = modelInfoGetEquation(&userData->data->modelData->modelDataXml, nlsData->equationIndex);
+    if (index < equation.numVar) return equation.vars[index];
+  }
+  return "x";
+}
+
+static double nlsPhysicalResidualNorm(const NONLINEAR_SYSTEM_DATA *nlsData, const double *g, int size)
+{
+  NLS_SCALING_DATA *scaling = nlsData->scaling;
+  int i;
+  for (i = 0; i < size; i++) scaling->fWork[i] = g[i] / scaling->fScale[i];
+  return enorm_(&size, scaling->fWork);
+}
+
+void nlsPrintScaleFactors(const NLS_USERDATA *userData, int size, enum OMC_LOG_STREAM stream)
+{
+  const NONLINEAR_SYSTEM_DATA *nlsData = userData->nlsData;
+  int i;
+  if (!OMC_ACTIVE_STREAM(stream)) return;
+  infoStreamPrint(stream, 1, "nonlinear scaling multipliers");
+  for (i = 0; i < size; i++) {
+    infoStreamPrint(stream, 0, "[%d] %s: x = %.16e, residual = %.16e", i + 1, nlsVariableName(userData, i),
+                    nlsData->scaling->xScale[i], nlsData->scaling->fScale[i]);
+  }
+  messageClose(stream);
+}
+
+void nlsPrintInitialGuess(const NLS_USERDATA *userData, const double *z, int size, enum OMC_LOG_STREAM stream)
+{
+  const NONLINEAR_SYSTEM_DATA *nlsData = userData->nlsData;
+  int i;
+  if (!OMC_ACTIVE_STREAM(stream)) return;
+  infoStreamPrint(stream, 1, "initial guess");
+  for (i = 0; i < size; i++) {
+    infoStreamPrint(stream, 0, "[%d] %s = %.16e [scaled = %.16e]", i + 1, nlsVariableName(userData, i),
+                    nlsScalingPhysicalX(nlsData, i, z[i]), z[i]);
+  }
+  messageClose(stream);
+}
+
+void nlsPrintStatus(const NLS_USERDATA *userData, const double *z, const double *g, int size, int functionEvaluations,
+                    double errorG, enum OMC_LOG_STREAM stream)
+{
+  const NONLINEAR_SYSTEM_DATA *nlsData = userData->nlsData;
+  double errorF;
+  int i;
+  if (!OMC_ACTIVE_STREAM(stream)) return;
+  errorF = nlsPhysicalResidualNorm(nlsData, g, size);
+  infoStreamPrint(stream, 1, "nls status");
+  infoStreamPrint(stream, 1, "variables");
+  for (i = 0; i < size; i++) {
+    infoStreamPrint(stream, 0, "[%d] %s = %.20e [scaled = %.20e]", i + 1, nlsVariableName(userData, i),
+                    nlsScalingPhysicalX(nlsData, i, z[i]), z[i]);
+  }
+  messageClose(stream);
+  infoStreamPrint(stream, 1, "residuals");
+  for (i = 0; i < size; i++) {
+    infoStreamPrint(stream, 0, "[%d] F = %.20e [scaled = %.20e]", i + 1,
+                    nlsScalingPhysicalResidual(nlsData, i, g[i]), g[i]);
+  }
+  messageClose(stream);
+  infoStreamPrint(stream, 1, "statistics");
+  infoStreamPrint(stream, 0, "nfunc = %d\nerror = %.20e\nerror_scaled = %.20e", functionEvaluations, errorF, errorG);
+  messageClose(stream);
+  messageClose(stream);
+}
 
 /**
  * @brief Allocate and initialize NLS user data.
@@ -390,6 +460,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   JACOBIAN* jacobian;
 
   size = nonlinsys->size;
+  nonlinsys->scaling = NULL;
+  nonlinsys->userData = NULL;
+  nonlinsys->solverSize = size;
   nonlinsys->numberOfFEval = 0;
   nonlinsys->numberOfIterations = 0;
 
@@ -432,17 +505,18 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
     /* only test for singularity if sparsity pattern is supposed to be there */
     modelica_boolean useSparsityPattern = sparsitySanityCheck(nonlinsys->sparsePattern, nonlinsys->size, OMC_LOG_NLS);
     if (!useSparsityPattern) {
-      // free sparsity pattern and don't use scaling
+      /* Fall back to a dense Jacobian. */
       warningStreamPrint(OMC_LOG_STDOUT, 0, "Sparsity pattern for non-linear system %d is not regular. "
                                         "This indicates that something went wrong during sparsity pattern generation. "
-                                        "Removing sparsity pattern and disabling NLS scaling.", sysNum);
+                                        "Removing sparsity pattern.", sysNum);
       /* DEBUG */
       //printSparseStructure(nonlinsys->sparsePattern, nonlinsys->size, nonlinsys->size, OMC_LOG_NLS, "NLS sparse pattern");
       freeSparsePattern(nonlinsys->sparsePattern);
       nonlinsys->sparsePattern = NULL;
-      omc_flag[FLAG_NO_SCALING] = TRUE;
     }
   }
+
+  nlsScalingAllocate(nonlinsys, jacobian);
 
 #if !defined(OMC_MINIMAL_RUNTIME)
   /* csv data call stats*/
@@ -463,8 +537,7 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   nonlinsys->nlsMethod = data->simulationInfo->nlsMethod;
   nonlinsys->nlsLinearSolver = data->simulationInfo->nlsLinearSolver;
 #if !defined(OMC_MINIMAL_RUNTIME)
-  if (nonlinsys->matrixFormat == OMC_MATRIX_SPARSE && nonlinsys->sparsePattern
-      && !(data->simulationInfo->nlsMethod == NLS_KINSOL || data->simulationInfo->nlsMethod == NLS_KINSOL_B))
+  if (nonlinsys->matrixFormat == OMC_MATRIX_SPARSE && nonlinsys->sparsePattern && data->simulationInfo->nlsMethod != NLS_KINSOL)
   {
     nonlinsys->nlsMethod = NLS_KINSOL;
     nonlinsys->nlsLinearSolver = NLS_LS_KLU;
@@ -473,11 +546,17 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
 
   /* Set NLS user data */
   NLS_USERDATA* nlsUserData = initNlsUserData(data, threadData, sysNum, nonlinsys, jacobian);
+  nonlinsys->userData = nlsUserData;
+
+  if (nonlinsys->homotopySupport &&
+      (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY)) {
+    nonlinsys->solverSize--;
+  }
 
 // FIXME: add generation of scalar system (total system size = 1) to codegen
 #if !defined(OMC_MINIMAL_RUNTIME)
   /* check for trivial sparsity pattern (is not always generated) */
-  if (nonlinsys->size == 1 && !nonlinsys->sparsePattern && (nonlinsys->nlsMethod == NLS_KINSOL || nonlinsys->nlsMethod == NLS_KINSOL_B)) {
+  if (nonlinsys->size == 1 && !nonlinsys->sparsePattern && nonlinsys->nlsMethod == NLS_KINSOL) {
     nonlinsys->nlsMethod = NLS_HYBRID;
     nonlinsys->nlsLinearSolver = NLS_LS_DEFAULT;
     warningStreamPrint(OMC_LOG_STDOUT, 0, "Sparsity pattern for non-linear system %d with size 1x1 (nnz = 1) does not exist. "
@@ -492,9 +571,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   case NLS_HYBRID:
     solverData = (struct dataSolver*) malloc(sizeof(struct dataSolver));
     if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      solverData->ordinaryData = allocateHybrdData(size-1, nlsUserData);
+      solverData->ordinaryData = allocateHybrdData(nonlinsys->solverSize, nlsUserData);
       nlsUserData = initNlsUserData(data, threadData, sysNum, nonlinsys, jacobian); /* Seperate userData for homotopy solver */
-      solverData->initHomotopyData = (void*) allocateHomotopyData(size-1, nlsUserData);
+      solverData->initHomotopyData = (void*) allocateHomotopyData(nonlinsys->solverSize, nlsUserData);
     } else {
       solverData->ordinaryData = allocateHybrdData(size, nlsUserData);
     }
@@ -503,19 +582,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   case NLS_KINSOL:
     solverData = (struct dataSolver*) malloc(sizeof(struct dataSolver));
     if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      solverData->initHomotopyData = (void*) allocateHomotopyData(size-1, nlsUserData);
+      solverData->initHomotopyData = (void*) allocateHomotopyData(nonlinsys->solverSize, nlsUserData);
     } else {
-      nonlinsys->solverData = (void*) nlsKinsolAllocate(size, nlsUserData, TRUE, !!nonlinsys->sparsePattern);
-      solverData->ordinaryData = nonlinsys->solverData;
-    }
-    nonlinsys->solverData = (void*) solverData;
-    break;
-  case NLS_KINSOL_B:
-    solverData = (struct dataSolver*) malloc(sizeof(struct dataSolver));
-    if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      solverData->initHomotopyData = (void*) allocateHomotopyData(size-1, nlsUserData);
-    } else {
-      nonlinsys->solverData = (void*) B_nlsKinsolAllocate(size, nlsUserData, TRUE, !!nonlinsys->sparsePattern);
+      nonlinsys->solverData = (void*) nlsKinsolAllocate(size, nlsUserData, TRUE);
       solverData->ordinaryData = nonlinsys->solverData;
     }
     nonlinsys->solverData = (void*) solverData;
@@ -523,9 +592,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   case NLS_NEWTON:
     solverData = (struct dataSolver*) malloc(sizeof(struct dataSolver));
     if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      solverData->ordinaryData = (void*) allocateNewtonData(size-1, nlsUserData);
+      solverData->ordinaryData = (void*) allocateNewtonData(nonlinsys->solverSize, nlsUserData);
       nlsUserData = initNlsUserData(data, threadData, sysNum, nonlinsys, jacobian); /* Seperate userData for homotopy solver */
-      solverData->initHomotopyData = (void*) allocateHomotopyData(size-1, nlsUserData);
+      solverData->initHomotopyData = (void*) allocateHomotopyData(nonlinsys->solverSize, nlsUserData);
     } else {
       solverData->ordinaryData = (void*) allocateNewtonData(size, nlsUserData);
     }
@@ -534,9 +603,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   case NLS_MIXED:
     mixedSolverData = (struct dataMixedSolver*) malloc(sizeof(struct dataMixedSolver));
     if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      mixedSolverData->newtonHomotopyData = (void*) allocateHomotopyData(size-1, nlsUserData);
+      mixedSolverData->newtonHomotopyData = (void*) allocateHomotopyData(nonlinsys->solverSize, nlsUserData);
       nlsUserData = initNlsUserData(data, threadData, sysNum, nonlinsys, jacobian); /* Seperate userData for hybrid solver */
-      mixedSolverData->hybridData = (void*) allocateHybrdData(size-1, nlsUserData);
+      mixedSolverData->hybridData = (void*) allocateHybrdData(nonlinsys->solverSize, nlsUserData);
     } else {
       mixedSolverData->newtonHomotopyData = (void*) allocateHomotopyData(size, nlsUserData);
       nlsUserData = initNlsUserData(data, threadData, sysNum, nonlinsys, jacobian); /* Seperate userData for hybrid solver */
@@ -547,7 +616,7 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
 #endif
   case NLS_HOMOTOPY:
     if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      nonlinsys->solverData = (void*) allocateHomotopyData(size-1, nlsUserData);
+      nonlinsys->solverData = (void*) allocateHomotopyData(nonlinsys->solverSize, nlsUserData);
     } else {
       nonlinsys->solverData = (void*) allocateHomotopyData(size, nlsUserData);
     }
@@ -582,7 +651,7 @@ int initializeNonlinearSystems(DATA *data, threadData_t *threadData)
 #if !defined(OMC_MINIMAL_RUNTIME)
     /* kinsol works best with KLU,
        they are both sparse so it makes sense to use them together */
-    if (data->simulationInfo->nlsMethod == NLS_KINSOL || data->simulationInfo->nlsMethod == NLS_KINSOL_B) {
+    if (data->simulationInfo->nlsMethod == NLS_KINSOL) {
       data->simulationInfo->nlsLinearSolver = NLS_LS_KLU;
     } else {
       data->simulationInfo->nlsLinearSolver = NLS_LS_LAPACK;
@@ -650,6 +719,7 @@ void freeNonlinearSyst(DATA* data, threadData_t* threadData, NONLINEAR_SYSTEM_DA
   free(nonlinsys->nominal);
   free(nonlinsys->min);
   free(nonlinsys->max);
+  nlsScalingFree(nonlinsys);
   nonlinsys->freeStaticNLSData(data, threadData, nonlinsys);
 
   freeValueList(nonlinsys->oldValueList, 1);
@@ -687,14 +757,6 @@ void freeNonlinearSyst(DATA* data, threadData_t* threadData, NONLINEAR_SYSTEM_DA
       freeHomotopyData(((struct dataSolver*) nonlinsys->solverData)->initHomotopyData);
     } else {
       nlsKinsolFree(((struct dataSolver*) nonlinsys->solverData)->ordinaryData);
-    }
-    free(nonlinsys->solverData);
-    break;
-  case NLS_KINSOL_B:
-    if (nonlinsys->homotopySupport && (data->callback->homotopyMethod == GLOBAL_ADAPTIVE_HOMOTOPY || data->callback->homotopyMethod == LOCAL_ADAPTIVE_HOMOTOPY )) {
-      freeHomotopyData(((struct dataSolver*) nonlinsys->solverData)->initHomotopyData);
-    } else {
-      B_nlsKinsolFree(((struct dataSolver*) nonlinsys->solverData)->ordinaryData);
     }
     free(nonlinsys->solverData);
     break;
@@ -964,6 +1026,23 @@ int updateInnerEquation(RESIDUAL_USERDATA* resUserData, int sysNumber, int discr
   return success;
 }
 
+static void nlsBeginSolve(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA *nlsData,
+                          modelica_integer unknowns)
+{
+  const modelica_real *xReference;
+
+  nlsScalingFinish(nlsData);
+  nlsData->userData->data = data;
+  nlsData->userData->threadData = threadData;
+  xReference = data->simulationInfo->discreteCall ? nlsData->nlsx : nlsData->nlsxExtrapolation;
+  nlsScalingPrepare(nlsData->userData, xReference, nlsData->solverSize, unknowns);
+}
+
+static void nlsEndSolve(NONLINEAR_SYSTEM_DATA *nlsData)
+{
+  nlsScalingFinish(nlsData);
+}
+
 /**
  * @brief Solve given non-linear system.
  *
@@ -976,127 +1055,89 @@ int updateInnerEquation(RESIDUAL_USERDATA* resUserData, int sysNumber, int discr
  */
 NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nonlinsys)
 {
-  NLS_SOLVER_STATUS solver_status = NLS_FAILED;
-  int casualTearingSet = nonlinsys->strictTearingFunctionCall != NULL;
+  volatile NLS_SOLVER_STATUS solverStatus = NLS_FAILED;
+  const modelica_boolean casualTearingSet = nonlinsys->strictTearingFunctionCall != NULL;
+  volatile modelica_boolean updateIterationVars = FALSE;
+  void *const solverDataOwner = nonlinsys->solverData;
   struct dataSolver *solverData;
   struct dataMixedSolver *mixedSolverData;
+
+#ifndef OMC_EMCC
+  MMC_TRY_INTERNAL(simulationJumpBuffer)
+#endif
+  nlsBeginSolve(data, threadData, nonlinsys, nonlinsys->solverSize);
 
   /* use the selected solver for solving nonlinear system */
   switch(nonlinsys->nlsMethod)
   {
 #if !defined(OMC_MINIMAL_RUNTIME)
   case NLS_HYBRID:
-    solverData = nonlinsys->solverData;
+    solverData = solverDataOwner;
     nonlinsys->solverData = solverData->ordinaryData;
-    /* try */
-    #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
-    #endif
-    solver_status = solveHybrd(data, threadData, nonlinsys);
-    /*catch */
-    #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
-    #endif
-    nonlinsys->solverData = solverData;
+    solverStatus = solveHybrd(data, threadData, nonlinsys);
     break;
   case NLS_KINSOL:
-    solverData = nonlinsys->solverData;
+    solverData = solverDataOwner;
     nonlinsys->solverData = solverData->ordinaryData;
-    /* try */
-    #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
-    #endif
-    solver_status = nlsKinsolSolve(data, threadData, nonlinsys);
-    /*catch */
-    #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
-    #endif
-    nonlinsys->solverData = solverData;
-    break;
-  case NLS_KINSOL_B:
-    solverData = nonlinsys->solverData;
-    nonlinsys->solverData = solverData->ordinaryData;
-    /* try */
-    #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
-    #endif
-    solver_status = B_nlsKinsolSolve(data, threadData, nonlinsys);
-    /*catch */
-    #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
-    #endif
-    nonlinsys->solverData = solverData;
+    solverStatus = nlsKinsolSolve(data, threadData, nonlinsys);
     break;
   case NLS_NEWTON:
-    solverData = nonlinsys->solverData;
+    solverData = solverDataOwner;
     nonlinsys->solverData = solverData->ordinaryData;
-    /* try */
-    #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
-    #endif
-    solver_status = solveNewton(data, threadData, nonlinsys);
-    /*catch */
-    #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
-    #endif
-    /* check if solution process was successful, if not use alternative tearing set if available (dynamic tearing)*/
-    if (solver_status != NLS_SOLVED && casualTearingSet){
-      debugString(OMC_LOG_DT, "Solving the casual tearing set failed! Now the strict tearing set is used.");
-      if(nonlinsys->strictTearingFunctionCall(data, threadData)) {
-        solver_status = NLS_SOLVED;
-      } else {
-        solver_status = NLS_FAILED;
-      }
-    }
-    nonlinsys->solverData = solverData;
+    solverStatus = solveNewton(data, threadData, nonlinsys);
     break;
 #endif
   case NLS_HOMOTOPY:
-    solver_status = solveHomotopy(data, threadData, nonlinsys);
+    solverStatus = solveHomotopy(data, threadData, nonlinsys);
     break;
 #if !defined(OMC_MINIMAL_RUNTIME)
   case NLS_MIXED:
-    mixedSolverData = nonlinsys->solverData;
+    mixedSolverData = solverDataOwner;
     nonlinsys->solverData = mixedSolverData->newtonHomotopyData;
+    solverStatus = solveHomotopy(data, threadData, nonlinsys);
 
-    /* try */
-    #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
-    #endif
-    solver_status = solveHomotopy(data, threadData, nonlinsys);
-
-    /* check if solution process was successful, if not use alternative tearing set if available (dynamic tearing)*/
-    if (solver_status != NLS_SOLVED && casualTearingSet){
+    if (solverStatus != NLS_SOLVED && casualTearingSet) {
+      nlsEndSolve(nonlinsys);
       debugString(OMC_LOG_DT, "Solving the casual tearing set failed! Now the strict tearing set is used.");
-      if(nonlinsys->strictTearingFunctionCall(data, threadData)) {
-        solver_status = NLS_SOLVED;
+      if (nonlinsys->strictTearingFunctionCall(data, threadData)) {
+        solverStatus = NLS_SOLVED;
       } else {
-        solver_status = NLS_FAILED;
+        solverStatus = NLS_FAILED;
       }
     }
 
-    if (solver_status != NLS_SOLVED ) {
+    if (solverStatus != NLS_SOLVED) {
+      if (!nonlinsys->scaling->prepared) {
+        nlsBeginSolve(data, threadData, nonlinsys, nonlinsys->solverSize);
+      }
       nonlinsys->solverData = mixedSolverData->hybridData;
-      solver_status = solveHybrd(data, threadData, nonlinsys);
+      solverStatus = solveHybrd(data, threadData, nonlinsys);
     }
 
-    /* update iteration variables of nonlinsys->nlsx */
-    if (solver_status == NLS_SOLVED){
-      nonlinsys->getIterationVars(data, nonlinsys->nlsx);
-    }
-
-    /*catch */
-    #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
-    #endif
-    nonlinsys->solverData = mixedSolverData;
+    updateIterationVars = solverStatus == NLS_SOLVED;
     break;
 #endif
   default:
     throwStreamPrint(threadData, "unrecognized nonlinear solver");
   }
+#ifndef OMC_EMCC
+  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+#endif
 
-  return solver_status;
+  nonlinsys->solverData = solverDataOwner;
+  if (nonlinsys->scaling->prepared) nlsEndSolve(nonlinsys);
+
+#if !defined(OMC_MINIMAL_RUNTIME)
+  if (nonlinsys->nlsMethod == NLS_NEWTON && solverStatus != NLS_SOLVED && casualTearingSet) {
+    debugString(OMC_LOG_DT, "Solving the casual tearing set failed! Now the strict tearing set is used.");
+    solverStatus = nonlinsys->strictTearingFunctionCall(data, threadData) ? NLS_SOLVED : NLS_FAILED;
+  }
+  if (nonlinsys->nlsMethod == NLS_MIXED && updateIterationVars) {
+    nonlinsys->getIterationVars(data, nonlinsys->nlsx);
+  }
+#endif
+
+  return solverStatus;
 }
 
 /**
@@ -1109,9 +1150,15 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
  */
 NLS_SOLVER_STATUS solveWithInitHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nonlinsys)
 {
-  NLS_SOLVER_STATUS success = NLS_FAILED;
+  volatile NLS_SOLVER_STATUS success = NLS_FAILED;
+  void *const solverDataOwner = nonlinsys->solverData;
   struct dataSolver *solverData;
   struct dataMixedSolver *mixedSolverData;
+
+#ifndef OMC_EMCC
+  MMC_TRY_INTERNAL(simulationJumpBuffer)
+#endif
+  nlsBeginSolve(data, threadData, nonlinsys, nonlinsys->solverSize + 1);
 
   /* use the homotopy solver for solving the initial system */
   switch(nonlinsys->nlsMethod)
@@ -1119,12 +1166,10 @@ NLS_SOLVER_STATUS solveWithInitHomotopy(DATA *data, threadData_t *threadData, NO
 #if !defined(OMC_MINIMAL_RUNTIME)
   case NLS_HYBRID:
   case NLS_KINSOL:
-  case NLS_KINSOL_B:
   case NLS_NEWTON:
-    solverData = nonlinsys->solverData;
+    solverData = solverDataOwner;
     nonlinsys->solverData = solverData->initHomotopyData;
     success = solveHomotopy(data, threadData, nonlinsys);
-    nonlinsys->solverData = solverData;
     break;
 #endif
   case NLS_HOMOTOPY:
@@ -1132,15 +1177,20 @@ NLS_SOLVER_STATUS solveWithInitHomotopy(DATA *data, threadData_t *threadData, NO
     break;
 #if !defined(OMC_MINIMAL_RUNTIME)
   case NLS_MIXED:
-    mixedSolverData = nonlinsys->solverData;
+    mixedSolverData = solverDataOwner;
     nonlinsys->solverData = mixedSolverData->newtonHomotopyData;
     success = solveHomotopy(data, threadData, nonlinsys);
-    nonlinsys->solverData = mixedSolverData;
     break;
 #endif
   default:
     throwStreamPrint(threadData, "unrecognized nonlinear solver");
   }
+#ifndef OMC_EMCC
+  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+#endif
+
+  nonlinsys->solverData = solverDataOwner;
+  if (nonlinsys->scaling->prepared) nlsEndSolve(nonlinsys);
 
   return success;
 }
@@ -1181,7 +1231,7 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
   }
 
 #if !defined(OMC_MINIMAL_RUNTIME)
-  kinsol = (nonlinsys->nlsMethod == NLS_KINSOL) || (nonlinsys->nlsMethod == NLS_KINSOL_B);
+  kinsol = nonlinsys->nlsMethod == NLS_KINSOL;
 #endif
 
   /* enable to avoid division by zero */

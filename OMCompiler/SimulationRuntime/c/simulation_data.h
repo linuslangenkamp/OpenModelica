@@ -376,6 +376,7 @@ typedef struct RESIDUAL_USERDATA {
 } RESIDUAL_USERDATA;
 
 typedef struct NLS_USERDATA NLS_USERDATA;
+typedef struct NLS_SCALING_DATA NLS_SCALING_DATA;
 
 typedef enum {
   NLS_FAILED = 0,                   /* NLS Solver failed to solve system */
@@ -424,7 +425,9 @@ typedef struct NONLINEAR_SYSTEM_DATA
   SOLVER_MATRIX_FORMAT matrixFormat;   /* dense or sparse, chosen by the backend */
   NONLINEAR_SOLVER nlsMethod;          /* nonlinear solver */
   void *solverData;
+  NLS_USERDATA *userData;              /* Shared residual and Jacobian callback data */
   NLS_LS nlsLinearSolver;              /* nls linear solver */
+  modelica_integer solverSize;         /* Number of equations solved by the NLS method */
 
   modelica_real *nlsx;                 /* x */
   modelica_real *nlsxOld;              /* previous x */
@@ -432,6 +435,7 @@ typedef struct NONLINEAR_SYSTEM_DATA
 
   VALUES_LIST *oldValueList;           /* old values organized in a sorted list for extrapolation and interpolate, respectively */
   modelica_real *resValues;            /* memory space for evaluated residual values */
+  NLS_SCALING_DATA *scaling;           /* Solver-coordinate view and common NLS callback work memory */
 
   NLS_SOLVER_STATUS solved;            /* Specifiex if the NLS could be solved (with less accuracy) or failed */
   modelica_real lastTimeSolved;        /* save last successful solved point in time */

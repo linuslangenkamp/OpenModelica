@@ -119,6 +119,7 @@ set(SOURCE_FMU_COMMON_HEADERS "omc_inline.h"
                               "simulation/solver/mixedSearchSolver.h"
                               "simulation/solver/mixedSystem.h"
                               "simulation/solver/model_help.h"
+                              "simulation/solver/nonlinearScaling.h"
                               "simulation/solver/nonlinearSolverHomotopy.h"
                               "simulation/solver/nonlinearSolverHybrd.h"
                               "simulation/solver/nonlinearSystem.h"
@@ -214,7 +215,8 @@ list(JOIN SOURCE_FMU_DGESV_FILES_LIST_QUOTED ",\n                               
 ######################################################################################################################
 ## Non-linear system files
 
-set(SOURCE_FMU_NLS_FILES_LIST simulation/solver/nonlinearSolverHybrd.c
+set(SOURCE_FMU_NLS_FILES_LIST simulation/solver/nonlinearScaling.c
+                              simulation/solver/nonlinearSolverHybrd.c
                               simulation/solver/nonlinearSystem.c
                               simulation/solver/nonlinearValuesList.c
                               simulation/solver/nonlinearSolverHomotopy.c)

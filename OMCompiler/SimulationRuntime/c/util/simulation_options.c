@@ -289,7 +289,7 @@ const char *FLAG_DESC[FLAG_MAX+1] = {
   /* FLAG_NOEVENTEMIT */                  "do not emit event points to the result file",
   /* FLAG_NO_RESTART */                   "disables the restart of the integration method after an event is performed, used by the methods: dassl, ida, gbode",
   /* FLAG_NO_ROOTFINDING */               "disables the internal root finding procedure of methods: dassl and ida.",
-  /* FLAG_NO_SCALING */                   "disables scaling for the variables and the residuals in the algebraic nonlinear solver KINSOL.",
+  /* FLAG_NO_SCALING */                   "disables scaling for variables, residuals, and Jacobians in algebraic nonlinear systems.",
   /* FLAG_NO_SUPPRESS_ALG */              "flag to not suppress algebraic variables in the local error test of ida solver in daeMode",
   /* FLAG_OPTDEBUGEJAC */                 "value specifies the number of iter from the dyn. optimization, which will be debug, creating *csv and *py file",
   /* FLAG_OPTIMIZER_NP */                 "value specifies the number of points in a subinterval",
@@ -604,7 +604,7 @@ const char *FLAG_DETAILED_DESC[FLAG_MAX+1] = {
   /* FLAG_NO_ROOTFINDING */
   "  Disables the internal root finding procedure of methods: dassl and ida.",
   /* FLAG_NO_SCALING */
-  "  Disables scaling for the variables and the residuals in the algebraic nonlinear solver KINSOL.",
+  "  Disables scaling for variables, residuals, and Jacobians in algebraic nonlinear systems.",
   /* FLAG_NO_SUPPRESS_ALG */
   "  Flag to not suppress algebraic variables in the local error test of the ida solver in daeMode.\n"
   "  In general, the use of this option is discouraged when solving DAE systems of index 1,\n"
@@ -1205,7 +1205,6 @@ const char *GB_NLS_METHOD_NAME[GB_NLS_MAX] = {
   /* GB_NLS_UNKNOWN = 0*/ "unknown",
   /* GB_NLS_NEWTON */     "newton",
   /* GB_NLS_KINSOL */     "kinsol",
-  /* GB_NLS_KINSOL_B */   "experimental-kinsol",
   /* GB_NLS_INTERNAL */   "internal"
 };
 
@@ -1213,7 +1212,6 @@ const char *GB_NLS_METHOD_DESC[GB_NLS_MAX] = {
   /* GB_NLS_UNKNOWN = 0*/ "unknown",
   /* GB_NLS_NEWTON */     "Newton method, dense",
   /* GB_NLS_KINSOL */     "SUNDIALS KINSOL: Inexact Newton, sparse",
-  /* GB_NLS_KINSOL_B */   "experimental kinsol",
   /* GB_NLS_INTERNAL */   "simplified Newton with decoupling transformation (uses KLU)"
 };
 
@@ -1397,13 +1395,11 @@ const char *NLS_NAME[NLS_MAX] = {
 #if !defined(OMC_MINIMAL_RUNTIME)
   /* NLS_HYBRID */       "hybrid",
   /* NLS_KINSOL */       "kinsol",
-  /* NLS_KINSOL_B */     "experimental-kinsol",
   /* NLS_NEWTON */       "newton",
   /* NLS_MIXED */        "mixed",
 #else
   /* NLS_HYBRID */       "hybrid-not-available",
   /* NLS_KINSOL */       "kinsol-not-available",
-  /* NLS_KINSOL_B */     "kinsol-experimental-not-available",
   /* NLS_NEWTON */       "newton-not-available",
   /* NLS_MIXED */        "mixed-not-available",
 #endif
@@ -1416,13 +1412,11 @@ const char *NLS_DESC[NLS_MAX] = {
 #if !defined(OMC_MINIMAL_RUNTIME)
   /* NLS_HYBRID */       "Modification of the Powell hybrid method from minpack - former default solver",
   /* NLS_KINSOL */       "SUNDIALS/KINSOL includes an interface to the sparse direct solver, KLU. See simulation option -nlsLS for more information.",
-  /* NLS_KINSOL_B */     "SUNDIALS/KINSOL (with internal scaling) includes an interface to the sparse direct solver, KLU. See simulation option -nlsLS for more information.",
   /* NLS_NEWTON */       "Newton Raphson - prototype implementation",
   /* NLS_MIXED */        "Mixed strategy. First the homotopy solver is tried and then as fallback the hybrid solver.",
 #else
   /* NLS_HYBRID */       "Modification of the Powell hybrid method from minpack - former default solver. Not available in minimal runtime.",
-  /* NLS_KINSOL */       "SUNDIALS/KINSOL includes interface to the sparse direct solver, KLU. See simulation option -nlsLS for more information."
-  /* NLS_KINSOL_B */     "SUNDIALS/KINSOL (with internal scaling) includes interface to the sparse direct solver, KLU. See simulation option -nlsLS for more information."
+  /* NLS_KINSOL */       "SUNDIALS/KINSOL includes interface to the sparse direct solver, KLU. See simulation option -nlsLS for more information.",
   /* NLS_NEWTON */       "Newton Raphson - prototype implementation. Not available in minimal runtime.",
   /* NLS_MIXED */        "Mixed strategy. First the homotopy solver is tried and then as fallback the hybrid solver. Not available in minimal runtime.",
 #endif

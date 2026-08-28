@@ -37,7 +37,6 @@ extern "C" {
 #include <string.h> /* memcpy */
 
 #include "../simulation_info_json.h"
-#include "../jacobian_util.h"
 #include "util/omc_error.h"
 
 #include "util/varinfo.h"
@@ -63,68 +62,36 @@ extern int dgesv_(int *n, int *nrhs, doublereal *a, int *lda, int *ipiv, doubler
  * @brief Calculate residual f(x) or Jacobian J(x).
  *
  * @param n         Size of vector x.
- * @param x         Input vector x.
+ * @param x         Scaled iteration variables.
  *                  Also used as work array, but will be reverted before function exits.
- * @param fvec      Value of f(x).
+ * @param fvec      Scaled residual values.
  *                  Will be computed if fj = 1.
  *                  Will be used to compute Jacobian if fj = 0.
  * @param userData  Pointer to Newton user data.
  * @param fj        Decides whether the function values or the jacobian matrix shall be calculated.
  *                  fj = 1: calculate function values
  *                  fj = 0: calculate jacobian matrix
- * @return int      Returns 1 on success (probably)
+ * @return int      Zero on success, non-zero on a recoverable callback failure.
  */
 int wrapper_fvec_newton(int n, double* x, double* fvec, NLS_USERDATA* userData, int fj)
 {
-  DATA* data = userData->data;
-  threadData_t *threadData = userData->threadData;
-  int sysNumber = userData->sysNumber;
   NONLINEAR_SYSTEM_DATA* nlsData = userData->nlsData;
-  JACOBIAN* jacobian = userData->analyticJacobian;
-
   DATA_NEWTON* solverData = (DATA_NEWTON*)(nlsData->solverData);
-  RESIDUAL_USERDATA resUserData = {.data=data, .threadData=threadData, .solverData=userData->solverData};
   int flag = 1;
+  int result;
 
   if (fj) {
-    nlsData->residualFunc(&resUserData, x, fvec, &flag);
+    result = nlsResidual(userData, x, fvec, &flag);
   } else {
     /* performance measurement */
     rt_ext_tp_tick(&nlsData->jacobianTimeClock);
 
-    if(nlsData->jacobianIndex != -1 && jacobian != NULL ) {
-      /* call generic dense Jacobian */
-      evalJacobian(data, threadData, jacobian, NULL, solverData->fjac, TRUE);
-    } else {
-      double delta_h = sqrt(solverData->epsfcn);
-      double delta_hh;
-      double xsave;
-
-      int i,j,l, linear=0;
-
-      for(i = 0; i < n; i++) {
-        delta_hh = fmax(delta_h * fmax(fabs(x[i]), fabs(fvec[i])), delta_h);
-        delta_hh = ((fvec[i] >= 0) ? delta_hh : -delta_hh);
-        delta_hh = x[i] + delta_hh - x[i];
-        xsave = x[i];
-        x[i] += delta_hh;
-        delta_hh = 1. / delta_hh;
-
-        wrapper_fvec_newton(n, x, solverData->rwork, userData, 1);
-        solverData->nfev++;
-
-        for(j = 0; j < n; j++) {
-          l = i * n + j;
-          solverData->fjac[l] = (solverData->rwork[j] - fvec[j]) * delta_hh;
-        }
-        x[i] = xsave;
-      }
-    }
+    result = nlsJacobian(userData, x, solverData->fjac, FALSE, NLS_JACOBIAN_AUTO);
     /* performance measurement and statistics */
     nlsData->jacobianTime += rt_ext_tp_tock(&(nlsData->jacobianTimeClock));
-    nlsData->numberOfJEval++;
+    if (!result) nlsData->numberOfJEval++;
   }
-  return flag;
+  return result;
 }
 
 /**
@@ -138,10 +105,11 @@ int wrapper_fvec_newton(int n, double* x, double* fvec, NLS_USERDATA* userData, 
 NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nlsData)
 {
   DATA_NEWTON* solverData = (DATA_NEWTON*)(nlsData->solverData);
+  NLS_SCALING_DATA *scaling = nlsData->scaling;
 
   int eqSystemNumber = 0;
   int i;
-  double xerror = -1, xerror_scaled = -1;
+  double xerror_scaled = -1;
   NLS_SOLVER_STATUS success = NLS_FAILED;
   int nfunc_evals = 0;
   double local_tol = solverData->ftol;
@@ -184,21 +152,17 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       "Start solving Non-Linear System %d (size %d) at time %g with Newton Solver",
       eqSystemNumber, (int) nlsData->size, data->localData[0]->timeValue);
 
-    for(i = 0; i < solverData->n; i++) {
-      infoStreamPrint(OMC_LOG_NLS_V, 1, "x[%d] = %.15e", i, data->simulationInfo->discreteCall ? nlsData->nlsx[i] : nlsData->nlsxExtrapolation[i]);
-      infoStreamPrint(OMC_LOG_NLS_V, 0, "nominal = %g +++ nlsx = %g +++ old = %g +++ extrapolated = %g",
-          nlsData->nominal[i], nlsData->nlsx[i], nlsData->nlsxOld[i], nlsData->nlsxExtrapolation[i]);
-      messageClose(OMC_LOG_NLS_V);
-    }
     messageClose(OMC_LOG_NLS_V);
   }
 
   /* set x vector */
   if(data->simulationInfo->discreteCall) {
-    memcpy(solverData->x, nlsData->nlsx, solverData->n*(sizeof(double)));
+    memcpy(solverData->x, scaling->z, solverData->n*(sizeof(double)));
   } else {
-    memcpy(solverData->x, nlsData->nlsxExtrapolation, solverData->n*(sizeof(double)));
+    memcpy(solverData->x, scaling->zExtrapolation, solverData->n*(sizeof(double)));
   }
+  nlsPrintInitialGuess(solverData->userData, solverData->x, solverData->n, OMC_LOG_NLS_V);
+  nlsPrintScaleFactors(solverData->userData, solverData->n, OMC_LOG_NLS_V);
   solverData->time = data->localData[0]->timeValue;
   solverData->initial = data->simulationInfo->initial;
 
@@ -215,18 +179,17 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       printErrorEqSyst(IMPROPER_INPUT, modelInfoGetEquation(&data->modelData->modelDataXml,eqSystemNumber), data->localData[0]->timeValue);
 
     /* reset non-contunuousCase */
-    if(nonContinuousCase && xerror > local_tol && xerror_scaled > local_tol)
+    if(nonContinuousCase && xerror_scaled > local_tol)
     {
       memcpy(data->simulationInfo->relationsPre, relationsPreBackup, sizeof(modelica_boolean)*data->modelData->nRelations);
       nonContinuousCase = 0;
     }
 
     /* check for error  */
-    xerror_scaled = enorm_(&solverData->n, solverData->fvecScaled);
-    xerror = enorm_(&solverData->n, solverData->fvec);
+    xerror_scaled = enorm_(&solverData->n, solverData->fvec);
 
     /* solution found */
-    if((xerror <= local_tol || xerror_scaled <= local_tol) && solverData->info > 0)
+    if(xerror_scaled <= local_tol && solverData->info > 0)
     {
       success = NLS_SOLVED;
       nfunc_evals += solverData->nfev;
@@ -234,14 +197,13 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       {
         infoStreamPrint(OMC_LOG_NLS_V, 1, "System solved");
         infoStreamPrint(OMC_LOG_NLS_V, 0, "%d restarts", retries);
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "nfunc = %d +++ error = %.15e +++ error_scaled = %.15e", nfunc_evals, xerror, xerror_scaled);
-        for(i = 0; i < solverData->n; i++)
-          infoStreamPrint(OMC_LOG_NLS_V, 0, "x[%d] = %.15e\n\tresidual = %e", i, solverData->x[i], solverData->fvec[i]);
+        nlsPrintStatus(solverData->userData, solverData->x, solverData->fvec, solverData->n, nfunc_evals,
+                       xerror_scaled, OMC_LOG_NLS_V);
         messageClose(OMC_LOG_NLS_V);
       }
 
       /* take the solution */
-      memcpy(nlsData->nlsx, solverData->x, solverData->n*(sizeof(double)));
+      memcpy(scaling->z, solverData->x, solverData->n*(sizeof(double)));
 
       /* Then try with old values (instead of extrapolating )*/
     }
@@ -253,7 +215,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
     }
     else if(retries < 1)
     {
-      memcpy(solverData->x, nlsData->nlsxOld, solverData->n*(sizeof(double)));
+      memcpy(solverData->x, scaling->zOld, solverData->n*(sizeof(double)));
 
       retries++;
       giveUp = 0;
@@ -267,7 +229,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
     else if(retries < 2)
     {
       for(i = 0; i < solverData->n; i++)
-        solverData->x[i] += nlsData->nominal[i] * 0.01;
+        solverData->x[i] += scaling->zNominal[i] * 0.01;
       retries++;
       giveUp = 0;
       nfunc_evals += solverData->nfev;
@@ -277,7 +239,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
     else if(retries < 3)
     {
       for(i = 0; i < solverData->n; i++)
-        solverData->x[i] = nlsData->nominal[i];
+        solverData->x[i] = scaling->zNominal[i];
       retries++;
       giveUp = 0;
       nfunc_evals += solverData->nfev;
@@ -290,7 +252,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
        * stuck in event iteration. e.g.: Modelica.Mechanics.Rotational.Examples.HeatLosses
        */
 
-      memcpy(solverData->x, nlsData->nlsxOld, solverData->n*(sizeof(double)));
+      memcpy(solverData->x, scaling->zOld, solverData->n*(sizeof(double)));
       retries++;
 
       /* try to solve a discontinuous system */
@@ -303,7 +265,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
     }
     else if(retries2 < 4)
     {
-      memcpy(solverData->x, nlsData->nlsxOld, solverData->n*(sizeof(double)));
+      memcpy(solverData->x, scaling->zOld, solverData->n*(sizeof(double)));
       /* reduce tolarance */
       local_tol = local_tol*10;
 
@@ -319,10 +281,8 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
       {
         infoStreamPrint(OMC_LOG_NLS_V, 0, "### No Solution! ###\n after %d restarts", retries);
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "nfunc = %d +++ error = %.15e +++ error_scaled = %.15e", nfunc_evals, xerror, xerror_scaled);
-        if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
-          for(i = 0; i < solverData->n; i++)
-            infoStreamPrint(OMC_LOG_NLS_V, 0, "x[%d] = %.15e\n\tresidual = %e", i, solverData->x[i], solverData->fvec[i]);
+        nlsPrintStatus(solverData->userData, solverData->x, solverData->fvec, solverData->n, nfunc_evals,
+                       xerror_scaled, OMC_LOG_NLS_V);
       }
     }
   }

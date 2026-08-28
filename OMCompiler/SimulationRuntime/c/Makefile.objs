@@ -113,6 +113,7 @@ else
   SOLVER_OBJS_NONLINEAR_SYSTEMS=nonlinearSolverHomotopy$(OBJ_EXT) \
                                 nonlinearSolverHybrd$(OBJ_EXT) \
                                 nonlinearValuesList$(OBJ_EXT) \
+                                nonlinearScaling$(OBJ_EXT) \
                                 nonlinearSystem$(OBJ_EXT)
 endif
 
@@ -169,7 +170,6 @@ ifeq ($(OMC_MINIMAL_RUNTIME),)
               gbode_util$(OBJ_EXT) \
               ida_solver$(OBJ_EXT) \
               jacobian_analysis$(OBJ_EXT) \
-              kinsol_b$(OBJ_EXT) \
               kinsolSolver$(OBJ_EXT) \
               linearSolverKlu$(OBJ_EXT) \
               linearSolverLis$(OBJ_EXT) \
@@ -195,6 +195,7 @@ SOLVER_HFILES = cvode_solver.h \
                 linearSystem.h \
                 mixedSystem.h \
                 model_help.h \
+                nonlinearScaling.h \
                 nonlinearSystem.h \
                 nonlinearValuesList.h \
                 solver_main.h \

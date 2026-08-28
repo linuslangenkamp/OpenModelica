@@ -58,38 +58,28 @@ typedef enum initialMode {
   INITIAL_OLDVALUES
 } initialMode;
 
-typedef enum scalingMode {
-  SCALING_NOMINALSTART = 1,            /* Scale with nomian values */
-  SCALING_ONES,                        /* Scale with ones (no scaling) */
-  SCALING_JACOBIAN                     /* Scale jacobian */
-} scalingMode;
-
 typedef struct NLS_KINSOL_DATA {
   /* ### configuration  ### */
   NLS_LS linearSolverMethod;           /* specifies the method to solve the
                                           underlying linear problem */
   int kinsolStrategy;                  /* Strategy used to solve nonlinear systems. Has to be one
                                           of: KIN_NONE, KIN_LINESEARCH, KIN_FP, KIN_PICARD */
+  NLS_JACOBIAN_METHOD jacobianMethod;  /* Common Jacobian evaluation selected for this attempt. */
   modelica_boolean attemptRetry;       /* True if KINSOL should retry with different settings after solution failed.*/
   int retries;                         /* Number of retries after failed solve of KINSOL */
   NLS_SOLVER_STATUS solved;            /* If the system is once solved reuse linear matrix information */
-  int nominalJac;                      /* 0/1 for disabled/enabled scaling on Jacobian */
 
   /* ### tolerances ### */
   double fnormtol;                     /* function-norm stopping tolerance */
   double scsteptol;                    /* step tolerance */
-  double maxstepfactor;                /* maximum newton step factor mxnewtstep = maxstepfactor
-                                        * norm2(xScaling) */
+  double maxstepfactor;                /* maximum Newton step factor in common solver coordinates */
   double mxnstepin;                    /* Maximum allowable scaled length of Newton step */
   modelica_boolean resetTol;           /* True if solution with less accuracy was accepted.
                                           Need to reset KINSOL  */
 
   /* ### work arrays ### */
   N_Vector initialGuess;
-  N_Vector xScale;                      /* x scaling vector */
-  N_Vector fScale;                      /* f(x) scaling vector */
-  N_Vector fRes;
-  N_Vector fTmp;
+  N_Vector scale;                       /* Unity: scaling is handled by the common NLS callbacks. */
 
   int iflag;
   long countResCalls;                  /* case of sparse function not avaiable */
@@ -108,16 +98,13 @@ typedef struct NLS_KINSOL_DATA {
   SUNMatrix J;                          /* (Non-)Sparse matrix template for cloning
                                           matrices needed within linear solver */
 
-  N_Vector tmp1, tmp2;                  /* Work arrays for nlsSparseJac */
-  SUNMatrix scaledJ;                    /* Scaled jacobian used for sparse Jacobian */
-
   /* Properties of non-linear system */
   int size;                             /* Size of non-linear problem */
   int nnz;                              /* Number of non-zero elements */
 
 } NLS_KINSOL_DATA;
 
-NLS_KINSOL_DATA* nlsKinsolAllocate(int size, NLS_USERDATA* userData, modelica_boolean attemptRetry, modelica_boolean isPatternAvailable);
+NLS_KINSOL_DATA* nlsKinsolAllocate(int size, NLS_USERDATA* userData, modelica_boolean attemptRetry);
 void nlsKinsolFree(NLS_KINSOL_DATA* kinsolData);
 NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR_SYSTEM_DATA* nlsData);
 

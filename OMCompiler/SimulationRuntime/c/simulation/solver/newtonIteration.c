@@ -32,13 +32,11 @@
 extern "C" {
 #endif
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h> /* memcpy */
 
 #include "simulation/simulation_info_json.h"
 #include "model_help.h"
-#include "omc_math.h"
 #include "util/omc_error.h"
 #include "util/varinfo.h"
 
@@ -50,22 +48,17 @@ extern "C" {
 /* Private function prototypes */
 
 int solveLinearSystem(int n, int* iwork, double* fvec, double *fjac, DATA_NEWTON* solverData);
-void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x_scaled, double* delta_f, double* error_f,
-                       double* scaledError_f, int n, double* x, double* fvec);
-void scaling_residual_vector(DATA_NEWTON* solverData);
-void damping_heuristic(double* x, genericResidualFunc f,
-                       double current_fvec_enorm, int n, double* fvec, double* lambda, int* k,
-                       DATA_NEWTON* solverData, NLS_USERDATA* userData);
-void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc f,
-                        double current_fvec_enorm, int n, double* fvec, int* k,
-                        DATA_NEWTON* solverData, NLS_USERDATA* userdata);
-void LineSearch(double* x, genericResidualFunc f,
-                double current_fvec_enorm, int n, double* fvec, int* k,
-                DATA_NEWTON* solverData, NLS_USERDATA* userdata);
-void Backtracking(double* x, genericResidualFunc f, double current_fvec_enorm,
-                  int n, double* fvec, DATA_NEWTON* solverData,
-                  NLS_USERDATA* userdata);
-void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double scaledError_f, double* eps);
+void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x_scaled, double* delta_f,
+                       double* error_f, int n, double* x, double* fvec);
+int damping_heuristic(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec, double* lambda,
+                      int* k, DATA_NEWTON* solverData, NLS_USERDATA* userData);
+int damping_heuristic2(double damping_parameter, double* x, genericResidualFunc f, double current_fvec_enorm, int n,
+                       double* fvec, int* k, DATA_NEWTON* solverData, NLS_USERDATA* userdata);
+int LineSearch(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec, int* k,
+               DATA_NEWTON* solverData, NLS_USERDATA* userdata);
+int Backtracking(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec,
+                 DATA_NEWTON* solverData, NLS_USERDATA* userdata);
+void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double* eps);
 
 /* Extern function prototypes */
 
@@ -73,6 +66,14 @@ extern double enorm_(int *n, double *x);
 extern int dgesv_(int *n, int *nrhs, doublereal *a, int *lda, int *ipiv, doublereal *b, int *ldb, int *info);
 extern void dgetrf_(int *m, int *n, doublereal *fjac, int *lda, int* iwork, int *info);
 extern void dgetrs_(char *trans, int *n, int *nrhs, doublereal *a, int *lda, int *ipiv, doublereal *b, int *ldb, int *info);
+
+static inline int evaluateNewtonResidual(genericResidualFunc f, int n, double *x, double *g, DATA_NEWTON *solverData,
+                                         void *userData)
+{
+  const int result = f(n, x, g, userData, 1);
+  solverData->nfev++;
+  return result;
+}
 
 /**
  * @brief Allocate NLS Newton data.
@@ -86,19 +87,14 @@ DATA_NEWTON* allocateNewtonData(int size, NLS_USERDATA* userData)
   DATA_NEWTON* newtonData = (DATA_NEWTON*) malloc(sizeof(DATA_NEWTON));
   assertStreamPrint(NULL, NULL != newtonData, "allocationNewtonData() failed. Out of memory.");
 
-  newtonData->resScaling = (double*) malloc(size*sizeof(double));
-  newtonData->fvecScaled = (double*) malloc(size*sizeof(double));
-
   newtonData->n = size;
   newtonData->x = (double*) malloc((size+1)*sizeof(double));
   newtonData->fvec = (double*) calloc(size,sizeof(double));
   newtonData->xtol = 1e-6;
   newtonData->ftol = 1e-6;
   newtonData->maxfev = size*100;
-  newtonData->epsfcn = DBL_EPSILON;
   newtonData->fjac = (double*) malloc((size*(size+1))*sizeof(double));
 
-  newtonData->rwork = (double*) malloc((size)*sizeof(double));
   newtonData->iwork = (int*) malloc(size*sizeof(int));
 
   /* damped newton */
@@ -126,12 +122,9 @@ DATA_NEWTON* allocateNewtonData(int size, NLS_USERDATA* userData)
  */
 void freeNewtonData(DATA_NEWTON* newtonData)
 {
-  free(newtonData->resScaling);
-  free(newtonData->fvecScaled);
   free(newtonData->x);
   free(newtonData->fvec);
   free(newtonData->fjac);
-  free(newtonData->rwork);
   free(newtonData->iwork);
 
   /* damped newton */
@@ -158,28 +151,29 @@ void freeNewtonData(DATA_NEWTON* newtonData)
 int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
 {
   int i, j, k = 0, l = 0, nrsh = 1;
+  int result;
   int n = solverData->n;    /* size of equation */
   double *x = solverData->x;
   double *fvec = solverData->fvec;
   double *eps = &(solverData->ftol);  /* tolerance for x */
-  double *fdeps = &(solverData->epsfcn);
   int * maxfev = &(solverData->maxfev);
   double *fjac = solverData->fjac;
-  double *work = solverData->rwork;
   int *iwork = solverData->iwork;
   int *info = &(solverData->info);
   int calc_jac = 1;
 
-  double error_f  = 1.0 + *eps, scaledError_f = 1.0 + *eps, delta_x = 1.0 + *eps, delta_f = 1.0 + *eps, delta_x_scaled = 1.0 + *eps, lambda = 1.0;
+  double error_f = 1.0 + *eps, delta_x = 1.0 + *eps;
+  double delta_f = 1.0 + *eps, delta_x_scaled = 1.0 + *eps;
+  double lambda = 1.0;
   double current_fvec_enorm, enorm_new;
 
   if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
   {
     infoStreamPrint(OMC_LOG_NLS_V, 1, "######### Start Newton maxfev: %d #########", (int)*maxfev);
 
-    infoStreamPrint(OMC_LOG_NLS_V, 1, "x vector");
+    infoStreamPrint(OMC_LOG_NLS_V, 1, "scaled iteration variables");
     for(i=0; i<n; i++)
-      infoStreamPrint(OMC_LOG_NLS_V, 0, "x[%d]: %e ", i, x[i]);
+      infoStreamPrint(OMC_LOG_NLS_V, 0, "z[%d]: %e ", i, x[i]);
     messageClose(OMC_LOG_NLS_V);
 
     messageClose(OMC_LOG_NLS_V);
@@ -188,34 +182,37 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
   *info = 1;
 
   /* calculate the function values */
-  (*f)(n, x, fvec, userData, 1);
-
-  solverData->nfev++;
+  if (evaluateNewtonResidual(f, n, x, fvec, solverData, userData)) {
+    *info = -1;
+    goto finish;
+  }
 
   /* save current fvec in f_old*/
   memcpy(solverData->f_old, fvec, n*sizeof(double));
 
   error_f = current_fvec_enorm = enorm_(&n, fvec);
 
-  memcpy(solverData->fvecScaled, solverData->fvec, n*sizeof(double));
-
-  while(error_f > *eps && scaledError_f > *eps  &&  delta_x > *eps  &&  delta_f > *eps  && delta_x_scaled > *eps)
+  while(error_f > *eps && delta_x > *eps && delta_f > *eps && delta_x_scaled > *eps)
   {
     if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
     {
       infoStreamPrint(OMC_LOG_NLS_V, 0, "\n**** start Iteration: %d  *****", (int) l);
 
       /*  Debug output */
-      infoStreamPrint(OMC_LOG_NLS_V, 1, "function values");
+      infoStreamPrint(OMC_LOG_NLS_V, 1, "scaled residuals");
       for(i=0; i<n; i++)
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "fvec[%d]: %e ", i, fvec[i]);
+        infoStreamPrint(OMC_LOG_NLS_V, 0, "g[%d]: %e ", i, fvec[i]);
       messageClose(OMC_LOG_NLS_V);
     }
 
     /* calculate jacobian if no matrix is given */
     if (calc_jac == 1 && solverData->calculate_jacobian >= 0)
     {
-      (*f)(n, x, fvec, userData, 0);
+      result = (*f)(n, x, fvec, userData, 0);
+      if (result) {
+        *info = -1;
+        break;
+      }
       solverData->factorization = 0;
       calc_jac = solverData->calculate_jacobian;
     }
@@ -231,7 +228,7 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
     {
       char *buffer = (char*)malloc(sizeof(char)*solverData->n*15);
 
-      infoStreamPrint(OMC_LOG_NLS_JAC, 1, "jacobian matrix [%dx%d]", n, n);
+      infoStreamPrint(OMC_LOG_NLS_JAC, 1, "scaled Jacobian matrix [%dx%d]", n, n);
       for(i=0; i<solverData->n;i++)
       {
         char *p = buffer;
@@ -254,37 +251,40 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
         solverData->x_new[i] = x[i]-solverData->x_increment[i];
 
       if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V)) {
-        infoStreamPrint(OMC_LOG_NLS_V, 1, "x_increment");
+        infoStreamPrint(OMC_LOG_NLS_V, 1, "scaled Newton correction");
         for(i = 0; i < n; i++) {
-          infoStreamPrint(OMC_LOG_NLS_V, 0, "x_increment[%d] = %e ", i, solverData->x_increment[i]);
+          infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_z[%d] = %e ", i, solverData->x_increment[i]);
         }
         messageClose(OMC_LOG_NLS_V);
       }
 
       if (solverData->newtonStrategy == NEWTON_DAMPED)
       {
-        damping_heuristic(x, f, current_fvec_enorm, n, fvec, &lambda, &k, solverData, userData);
+        result = damping_heuristic(x, f, current_fvec_enorm, n, fvec, &lambda, &k, solverData, userData);
       }
       else if (solverData->newtonStrategy == NEWTON_DAMPED2)
       {
-        damping_heuristic2(0.75, x, f, current_fvec_enorm, n, fvec, &k, solverData, userData);
+        result = damping_heuristic2(0.75, x, f, current_fvec_enorm, n, fvec, &k, solverData, userData);
       }
       else if (solverData->newtonStrategy == NEWTON_DAMPED_LS)
       {
-        LineSearch(x, f, current_fvec_enorm, n, fvec, &k, solverData, userData);
+        result = LineSearch(x, f, current_fvec_enorm, n, fvec, &k, solverData, userData);
       }
       else if (solverData->newtonStrategy == NEWTON_DAMPED_BT)
       {
-        Backtracking(x, f, current_fvec_enorm, n, fvec, solverData, userData);
+        result = Backtracking(x, f, current_fvec_enorm, n, fvec, solverData, userData);
       }
       else
       {
         /* calculate the function values */
-        (*f)(n, solverData->x_new, fvec, userData, 1);
-        solverData->nfev++;
+        result = evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userData);
+      }
+      if (result) {
+        *info = -1;
+        break;
       }
 
-      calculatingErrors(solverData, &delta_x, &delta_x_scaled, &delta_f, &error_f, &scaledError_f, n, x, fvec);
+      calculatingErrors(solverData, &delta_x, &delta_x_scaled, &delta_f, &error_f, n, x, fvec);
 
       /* updating x */
       memcpy(x, solverData->x_new, n*sizeof(double));
@@ -316,14 +316,15 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
 
     if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
     {
-      infoStreamPrint(OMC_LOG_NLS_V, 1, "x vector");
+      infoStreamPrint(OMC_LOG_NLS_V, 1, "scaled iteration variables");
       for(i = 0; i < n; i++)
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "x[%d] = %e ", i, x[i]);
+        infoStreamPrint(OMC_LOG_NLS_V, 0, "z[%d] = %e ", i, x[i]);
       messageClose(OMC_LOG_NLS_V);
-      printErrors(delta_x, delta_x_scaled, delta_f, error_f, scaledError_f, eps);
+      printErrors(delta_x, delta_x_scaled, delta_f, error_f, eps);
     }
   }
 
+finish:
   solverData->numberOfIterations += l;
   solverData->numberOfFunctionEvaluations += solverData->nfev;
 
@@ -336,28 +337,26 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
  * Print if tolerance is reached.
  * Errors computed by calculatingErrors.
  *
- * @param delta_x         delta_x := ||x_new - x_old||
- * @param delta_x_scaled  delta_x_scaled := delta_x / scaling_factor
- * @param delta_f         delta_f := || f_old - f_new ||
- * @param error_f         enorm_(n,fvec)
- * @param scaledError_f
+ * @param delta_x         Norm of the step in solver coordinates.
+ * @param delta_x_scaled  Step norm relative to the current solver-coordinate norm.
+ * @param delta_f         Change of the scaled residual norm.
+ * @param error_f         Scaled residual norm.
  * @param eps
  */
-void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double scaledError_f, double* eps)
+void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double* eps)
 {
   infoStreamPrint(OMC_LOG_NLS_V, 1, "errors ");
-  infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_x = %e \ndelta_x_scaled = %e \ndelta_f = %e \nerror_f = %e \nscaledError_f = %e", delta_x, delta_x_scaled, delta_f, error_f, scaledError_f);
+  infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_z = %e \nrelative_delta_z = %e \ndelta_g = %e \nerror_g = %e",
+                  delta_x, delta_x_scaled, delta_f, error_f);
 
   if (delta_x < *eps)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_x reached eps");
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_z reached eps");
   if (delta_x_scaled < *eps)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_x_scaled reached eps");
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "relative_delta_z reached eps");
   if (delta_f < *eps)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_f reached eps");
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_g reached eps");
   if (error_f < *eps)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "error_f reached eps");
-  if (scaledError_f < *eps)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "scaledError_f reached eps");
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "error_g reached eps");
 
   messageClose(OMC_LOG_NLS_V);
 }
@@ -406,8 +405,8 @@ int solveLinearSystem(int n, int* iwork, double* fvec, double *fjac, DATA_NEWTON
 /**
  * @brief Calculate delta and error.
  *
- * Current value of x from input `x`, old value from `solverData->x_new`.
- * Current value of f(x) from input `fvec`, old value from `solverData->fvecScaled`
+ * Current solver-coordinate value from input `x`, old value from `solverData->x_new`.
+ * Current scaled residual from input `fvec`, old value from `solverData->f_old`.
  *
  * @param solverData      Newton solver data.
  * @param delta_x         delta_x := ||x_new - x_old||
@@ -415,14 +414,12 @@ int solveLinearSystem(int n, int* iwork, double* fvec, double *fjac, DATA_NEWTON
  *                        scaling_factor := ||x||
  * @param delta_f         delta_f := ||f_old - f_new||
  * @param error_f         error_f := ||fvec||
- * @param scaledError_f   scaledError_f := || fvec ./ resScaling||, where
- *                        resScaling is from solverData.
  * @param n               Length of arrays x and fvec.
  * @param x               New vector x.
  * @param fvec            New vector f(x).
  */
-void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x_scaled, double* delta_f, double* error_f,
-                       double* scaledError_f, int n, double* x, double* fvec)
+void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x_scaled, double* delta_f,
+                       double* error_f, int n, double* x, double* fvec)
 {
   int i=0;
   double scaling_factor;
@@ -447,61 +444,6 @@ void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x
   *delta_f=enorm_(&n, solverData->delta_f);
 
   *error_f = enorm_(&n,fvec);
-
-  /* scaling residual vector */
-  scaling_residual_vector(solverData);
-
-  for (i=0; i<n; i++) {
-    solverData->fvecScaled[i]=fvec[i]/solverData->resScaling[i];
-  }
-  *scaledError_f = enorm_(&n,solverData->fvecScaled);
-}
-
-/**
- * @brief Compute residual scaling vector.
- *
- * scalingVector[i] = 1 / ||Jac(i,:)||
- * Warn if Jacobian row is all zeros i.e. the Jacobian is singular.
- *
- * @param solverData      Newton solver data.
- * @param scalingVector   Residual scaling vector.
- */
-void compute_scaling_vector(DATA_NEWTON* solverData, double* scalingVector) {
-  int i;
-  int jac_row_start;
-
-  for(i=0; i<solverData->n; i++)
-  {
-    jac_row_start = i*solverData->n;
-    scalingVector[i] = _omc_gen_maximumVectorNorm(&(solverData->fjac[jac_row_start]), solverData->n);
-    if(scalingVector[i] <= 0.0) {
-      warningStreamPrint(OMC_LOG_NLS_V, 0, "Jacobian matrix is singular. Scaling of residual entry is set to 1e-16.");
-      scalingVector[i] = 1e-16;
-    }
-    else if (!isfinite(scalingVector[i]))
-    {
-      warningStreamPrint(OMC_LOG_NLS_V, 0, "Jacobian entry is inf or nan. Scaling of residual entry will be set to 1.0.");
-      scalingVector[i] = 1.0;
-    }
-  }
-}
-
-/**
- * @brief Scale residual vector.
- *
- * Save result in solverData->fvecScaled.
- *
- * @param solverData  Newton solver data.
- */
-void scaling_residual_vector(DATA_NEWTON* solverData)
-{
-  int i;
-
-  compute_scaling_vector(solverData, solverData->resScaling);
-  for(i=0; i<solverData->n; i++)
-  {
-    solverData->fvecScaled[i] = solverData->fvec[i] / solverData->resScaling[i];
-  }
 }
 
 /*! \fn damping_heuristic
@@ -513,17 +455,15 @@ void scaling_residual_vector(DATA_NEWTON* solverData)
  *  treshold for damping = 0.01
  *  compiler flag: -newton = damped
  */
-void damping_heuristic(double* x, genericResidualFunc f,
-                       double current_fvec_enorm, int n, double* fvec, double* lambda, int* k,
-                       DATA_NEWTON* solverData, NLS_USERDATA* userData)
+int damping_heuristic(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec, double* lambda,
+                      int* k, DATA_NEWTON* solverData, NLS_USERDATA* userData)
 {
   int i;
   double enorm_new, treshold = 1e-2;
   modelica_boolean startDamping = FALSE; /* remember to close log message */
 
   /* calculate new function values */
-  (*f)(n, solverData->x_new, fvec, userData, 1);
-  solverData->nfev++;
+  if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userData)) return 1;
 
   enorm_new=enorm_(&n,fvec);
 
@@ -542,8 +482,10 @@ void damping_heuristic(double* x, genericResidualFunc f,
 
 
     /* calculate new function values */
-    (*f)(n, solverData->x_new, fvec, userData, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userData)) {
+      if (startDamping) messageClose(OMC_LOG_NLS_V);
+      return 1;
+    }
 
     enorm_new=enorm_(&n,fvec);
 
@@ -561,8 +503,10 @@ void damping_heuristic(double* x, genericResidualFunc f,
           solverData->x_new[i]=x[i]-solverData->x_increment[i];
 
       /* calculate new function values */
-      (*f)(n, solverData->x_new, fvec, userData, 1);
-      solverData->nfev++;
+      if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userData)) {
+        if (startDamping) messageClose(OMC_LOG_NLS_V);
+        return 1;
+      }
 
       (*k)++;
 
@@ -574,6 +518,7 @@ void damping_heuristic(double* x, genericResidualFunc f,
 
   if (startDamping)
     messageClose(OMC_LOG_NLS_V);
+  return 0;
 }
 
 /*! \fn damping_heuristic2
@@ -585,17 +530,15 @@ void damping_heuristic(double* x, genericResidualFunc f,
  *  treshold for damping = 0.0001
  *  compiler flag: -newton = damped2
  */
-void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc f,
-                        double current_fvec_enorm, int n, double* fvec, int* k,
-                        DATA_NEWTON* solverData, NLS_USERDATA* userdata)
+int damping_heuristic2(double damping_parameter, double* x, genericResidualFunc f, double current_fvec_enorm, int n,
+                       double* fvec, int* k, DATA_NEWTON* solverData, NLS_USERDATA* userdata)
 {
   int i;
   double enorm_new, treshold = 1e-4, lambda=1;
   modelica_boolean startDamping = FALSE; /* remember to close log message */
 
   /* calculate new function values */
-  (*f)(n, solverData->x_new, fvec, userdata, 1);
-  solverData->nfev++;
+  if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
 
   enorm_new=enorm_(&n,fvec);
 
@@ -615,8 +558,10 @@ void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc
 
 
     /* calculate new function values */
-    (*f)(n, solverData->x_new, fvec, userdata, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) {
+      if (startDamping) messageClose(OMC_LOG_NLS_V);
+      return 1;
+    }
 
     enorm_new=enorm_(&n,fvec);
 
@@ -634,8 +579,10 @@ void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc
           solverData->x_new[i]=x[i]-solverData->x_increment[i];
 
       /* calculate new function values */
-      (*f)(n, solverData->x_new, fvec, userdata, 1);
-      solverData->nfev++;
+      if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) {
+        if (startDamping) messageClose(OMC_LOG_NLS_V);
+        return 1;
+      }
 
       (*k)++;
 
@@ -645,6 +592,7 @@ void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc
 
   if (startDamping)
     messageClose(OMC_LOG_NLS_V);
+  return 0;
 }
 
 /*! \fn LineSearch
@@ -656,9 +604,8 @@ void damping_heuristic2(double damping_parameter, double* x, genericResidualFunc
  *
  *  compiler flag: -newton = damped_ls
  */
-void LineSearch(double* x, genericResidualFunc f,
-                double current_fvec_enorm, int n, double* fvec, int* k,
-                DATA_NEWTON* solverData, NLS_USERDATA* userdata)
+int LineSearch(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec, int* k,
+               DATA_NEWTON* solverData, NLS_USERDATA* userdata)
 {
   int i,j;
   double enorm_new, enorm_minimum=current_fvec_enorm, lambda_minimum=0;
@@ -671,8 +618,7 @@ void LineSearch(double* x, genericResidualFunc f,
       solverData->x_new[i]=x[i]-lambda[j]*solverData->x_increment[i];
 
     /* calculate new function values */
-    (*f)(n, solverData->x_new, fvec, userdata, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
 
     enorm_new=enorm_(&n,fvec);
 
@@ -698,16 +644,14 @@ void LineSearch(double* x, genericResidualFunc f,
       lambda_minimum = 0.125;
 
       /* calculate new function values */
-      (*f)(n, solverData->x_new, fvec, userdata, 1);
-      solverData->nfev++;
+      if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
     }
     else
     {
       lambda_minimum = 1;
 
       /* calculate new function values */
-      (*f)(n, solverData->x_new, fvec, userdata, 1);
-      solverData->nfev++;
+      if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
     }
 
     (*k)++;
@@ -720,6 +664,7 @@ void LineSearch(double* x, genericResidualFunc f,
 
   for (i=0; i<n; i++)
     solverData->x_new[i]=x[i]-lambda_minimum*solverData->x_increment[i];
+  return 0;
 }
 
 /*! \fn Backtracking
@@ -732,13 +677,8 @@ void LineSearch(double* x, genericResidualFunc f,
  *
  *  compiler flag: -newton = damped_bt
  */
-void Backtracking(double* x,
-                  genericResidualFunc f,
-                  double current_fvec_enorm,
-                  int n,
-                  double* fvec,
-                  DATA_NEWTON* solverData,
-                  NLS_USERDATA* userdata)
+int Backtracking(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec,
+                 DATA_NEWTON* solverData, NLS_USERDATA* userdata)
 {
   int i,j;
   double enorm_new, enorm_f, lambda, a1, b1, a, b, tau, g1, g2;
@@ -751,8 +691,7 @@ void Backtracking(double* x,
     solverData->x_new[i]=x[i]-solverData->x_increment[i];
 
   /* calculate new function values */
-  (*f)(n, solverData->x_new, fvec, userdata, 1);
-  solverData->nfev++;
+  if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
 
 
   /* calculate new enorm */
@@ -776,8 +715,7 @@ void Backtracking(double* x,
     a1 = a + (1-tau)*(b-a);
     /* g1 = g(a1) = h(x_old - a1 * x_increment) = 1/2 * ||f(x_old- a1 * x_increment)||^2 */
     solverData->x_new[i] = x[i]- a1 * solverData->x_increment[i];
-    (*f)(n, solverData->x_new, fvec, userdata, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
     enorm_f= enorm_(&n,fvec);
     g1 = 0.5 * enorm_f * enorm_f;
 
@@ -785,8 +723,7 @@ void Backtracking(double* x,
     b1 = a + tau * (b-a);
     /* g2 = g(b1) = h(x_old - b1 * x_increment) = 1/2 * ||f(x_old- b1 * x_increment)||^2 */
     solverData->x_new[i] = x[i]- b1 * solverData->x_increment[i];
-    (*f)(n, solverData->x_new, fvec, userdata, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
     enorm_f= enorm_(&n,fvec);
     g2 = 0.5 * enorm_f * enorm_f;
 
@@ -801,8 +738,7 @@ void Backtracking(double* x,
 
         /* g1 = g(a1) = h(x_old - a1 * x_increment) = 1/2 * ||f(x_old- a1 * x_increment)||^2 */
         solverData->x_new[i] = x[i]- a1 * solverData->x_increment[i];
-        (*f)(n, solverData->x_new, fvec, userdata, 1);
-        solverData->nfev++;
+        if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
         enorm_f= enorm_(&n,fvec);
         g1 = 0.5 * enorm_f * enorm_f;
       }
@@ -815,8 +751,7 @@ void Backtracking(double* x,
 
         /* g2 = g(b1) = h(x_old - b1 * x_increment) = 1/2 * ||f(x_old- b1 * x_increment)||^2 */
         solverData->x_new[i] = x[i]- b1 * solverData->x_increment[i];
-        (*f)(n, solverData->x_new, fvec, userdata, 1);
-        solverData->nfev++;
+        if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
         enorm_f= enorm_(&n,fvec);
         g2 = 0.5 * enorm_f * enorm_f;
       }
@@ -831,9 +766,9 @@ void Backtracking(double* x,
       solverData->x_new[i]=x[i]-lambda*solverData->x_increment[i];
 
     /* calculate new function values */
-    (*f)(n, solverData->x_new, fvec, userdata, 1);
-    solverData->nfev++;
+    if (evaluateNewtonResidual(f, n, solverData->x_new, fvec, solverData, userdata)) return 1;
   }
+  return 0;
 }
 
 #ifdef __cplusplus

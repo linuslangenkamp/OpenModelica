@@ -46,25 +46,26 @@ static int cmp_fabs_desc(const void *a, const void *b)
 /**
  * @brief Create and initialize SVD data structure for a given nonlinear system.
  *
- * Builds a dense matrix from a sparse pattern (if provided), applies scaling,
- * and allocates buffers for the SVD results (singular values and vectors).
+ * Builds a dense matrix from sparse CSC values when a pattern is supplied and
+ * allocates buffers for the SVD results (singular values and vectors).
  *
  * @param data         Pointer to the global simulation DATA structure.
  * @param nls_data     Pointer to the nonlinear system data.
- * @param values       Non-zero values of the sparse Jacobian (CSC format).
- * @param x_scale      Optional scaling factors for variables (NULL if not used).
- * @param f_scale      Optional scaling factors for residuals (NULL if not used).
+ * @param values          Dense column-major or sparse CSC Jacobian values.
+ * @param sparse_pattern  CSC pattern for sparse values, NULL for dense values.
+ * @param scaled          Whether the supplied Jacobian is scaled.
+ * @param caller          Diagnostic caller.
  *
  * @return Pointer to an allocated SVD_DATA structure, or NULL on allocation failure.
  */
-static SVD_DATA *svd_dense_create(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, modelica_boolean scaled, SolverCaller caller)
+static SVD_DATA *svd_dense_create(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, const SPARSE_PATTERN *sparse_pattern,
+                                  modelica_boolean scaled, SolverCaller caller)
 {
     SVD_DATA *svd_data = calloc(1, sizeof(SVD_DATA));
     if (!svd_data) return NULL;
 
     int rows = nls_data->size;
     int cols = nls_data->size;
-    SPARSE_PATTERN *sparse_pattern = nls_data->sparsePattern;
     unsigned int *lead, *index;
     unsigned int row, column, nz;
 
@@ -218,13 +219,13 @@ static void svd_dense_calculate_statistics(SVD_DATA* svd_data)
     svd_data->least_one_percent = first_below;
 }
 
-static void svd_general_matrix_print_info(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data)
+static void svd_general_matrix_print_info(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, const SPARSE_PATTERN *sparse_pattern)
 {
     infoStreamPrint(OMC_LOG_NLS_SVD, 1, "Matrix Info");
     infoStreamPrint(OMC_LOG_NLS_SVD, 0, "NLS eq index = " OMC_INT_FORMAT, nls_data->equationIndex);
     infoStreamPrint(OMC_LOG_NLS_SVD, 0, "Columns      = " OMC_INT_FORMAT, nls_data->size);
     infoStreamPrint(OMC_LOG_NLS_SVD, 0, "Rows         = " OMC_INT_FORMAT, nls_data->size);
-    infoStreamPrint(OMC_LOG_NLS_SVD, 0, "NNZ          = %u", nls_data->sparsePattern->nnz);
+    infoStreamPrint(OMC_LOG_NLS_SVD, 0, "NNZ          = %u", sparse_pattern ? sparse_pattern->nnz : (unsigned int)(nls_data->size * nls_data->size));
     infoStreamPrint(OMC_LOG_NLS_SVD, 0, "Curr Time    = %-11.5e", data->localData[0]->timeValue);
     messageClose(OMC_LOG_NLS_SVD);
 }
@@ -276,7 +277,7 @@ static void svd_dense_dump_statistics(const SVD_DATA *svd_data)
 
     infoStreamPrint(OMC_LOG_NLS_SVD, 1, "%s: dense SVD analysis (scaled = %s, Caller: %s).",
                 SolverCaller_callerString(svd_data->caller), svd_data->scaled ? "true" : "false", SolverCaller_toString(svd_data->caller));
-    svd_general_matrix_print_info(svd_data->data, nls_data);
+    svd_general_matrix_print_info(svd_data->data, nls_data, svd_data->sparse_pattern);
     svd_general_matrix_print_cond(svd_data->cond);
 
     // singular values
@@ -395,10 +396,11 @@ static void svd_dense_dump_statistics(const SVD_DATA *svd_data)
     messageClose(OMC_LOG_NLS_SVD);
 }
 
-static int svd_dense_main(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, modelica_boolean scaled, SolverCaller caller)
+static int svd_dense_main(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, const SPARSE_PATTERN *sparse_pattern,
+                          modelica_boolean scaled, SolverCaller caller)
 {
     int ret = 0;
-    SVD_DATA *svd_data = svd_dense_create(data, nls_data, values, scaled, caller);
+    SVD_DATA *svd_data = svd_dense_create(data, nls_data, values, sparse_pattern, scaled, caller);
     ret = svd_dense_compute_lapack(svd_data);
     if (ret != 0) return ret;
     svd_dense_calculate_statistics(svd_data);
@@ -451,6 +453,7 @@ typedef struct primme_callback_ctx_t
 {
     DATA *data;
     NONLINEAR_SYSTEM_DATA *nls_data;
+    const SPARSE_PATTERN *sparse_pattern;
     modelica_real *values;
     modelica_boolean scaled;
     SolverCaller caller;
@@ -476,7 +479,7 @@ static void compute_jacobi_diags(const NONLINEAR_SYSTEM_DATA *nls_data,
                                  const double *values,
                                  primme_callback_ctx_t *ctx)
 {
-    const SPARSE_PATTERN *sp = nls_data->sparsePattern;
+    const SPARSE_PATTERN *sp = ctx->sparse_pattern;
     const modelica_integer size = nls_data->size;
     double sigma = 1e-8;
 
@@ -610,10 +613,10 @@ static primme_result_t* svd_sparse_compute(primme_handle_t* handle, primme_svds_
     return &handle->result;
 }
 
-static void matrix_vector(const NONLINEAR_SYSTEM_DATA *nls_data, const double *values, const double *x, double *y)
+static void matrix_vector(const NONLINEAR_SYSTEM_DATA *nls_data, const SPARSE_PATTERN *sparsity,
+                          const double *values, const double *x, double *y)
 {
     modelica_integer row, column, nz;
-    const SPARSE_PATTERN *sparsity = nls_data->sparsePattern;
     memset(y, 0, nls_data->size * sizeof(double));
 
     for (column = 0; column < nls_data->size; column++)
@@ -626,10 +629,10 @@ static void matrix_vector(const NONLINEAR_SYSTEM_DATA *nls_data, const double *v
     }
 }
 
-static void matrix_vector_transpose(const NONLINEAR_SYSTEM_DATA *nls_data, const double *values, const double *x, double *y)
+static void matrix_vector_transpose(const NONLINEAR_SYSTEM_DATA *nls_data, const SPARSE_PATTERN *sparsity,
+                                    const double *values, const double *x, double *y)
 {
     modelica_integer row, column, nz;
-    const SPARSE_PATTERN *sparsity = nls_data->sparsePattern;
     memset(y, 0, nls_data->size * sizeof(double));
 
     for (column = 0; column < nls_data->size; column++)
@@ -679,7 +682,7 @@ static void LinearOperator(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, i
         {
             xvec = (double *)x + (*ldx) * i;
             yvec = (double *)y + (*ldy) * i;
-            matrix_vector(nls_data, values, xvec, yvec);
+            matrix_vector(nls_data, ctx->sparse_pattern, values, xvec, yvec);
         }
     }
     else
@@ -689,7 +692,7 @@ static void LinearOperator(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, i
         {
             xvec = (double *)x + (*ldx) * i;
             yvec = (double *)y + (*ldy) * i;
-            matrix_vector_transpose(nls_data, values, xvec, yvec);
+            matrix_vector_transpose(nls_data, ctx->sparse_pattern, values, xvec, yvec);
         }
     }
     *err = 0;
@@ -868,7 +871,7 @@ static void svd_sparse_dump_statistics(primme_callback_ctx_t *ctx, primme_handle
 
     infoStreamPrint(OMC_LOG_NLS_SVD, 1, "%s: sparse SVD analysis (scaled = %s, Caller: %s).",
                 SolverCaller_callerString(ctx->caller), ctx->scaled ? "true" : "false", SolverCaller_toString(ctx->caller));
-    svd_general_matrix_print_info(ctx->data, ctx->nls_data);
+    svd_general_matrix_print_info(ctx->data, ctx->nls_data, ctx->sparse_pattern);
 
     modelica_real sigma_max = res_top->svals[0];
     modelica_real sigma_min = res_least->svals[0];
@@ -881,9 +884,11 @@ static void svd_sparse_dump_statistics(primme_callback_ctx_t *ctx, primme_handle
     messageClose(OMC_LOG_NLS_SVD);
 }
 
-static int svd_sparse_main(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, modelica_boolean scaled, SolverCaller caller, int svd_count) {
-    primme_callback_ctx_t ctx = { .data = data, .nls_data = nls_data, .values = values, .scaled = scaled, .caller = caller,
-                                  .svd_count = svd_count, .inv_diag_AtA = NULL, .inv_diag_AAt = NULL};
+static int svd_sparse_main(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, const SPARSE_PATTERN *sparse_pattern,
+                           modelica_boolean scaled, SolverCaller caller, int svd_count)
+{
+    primme_callback_ctx_t ctx = { .data = data, .nls_data = nls_data, .sparse_pattern = sparse_pattern, .values = values, .scaled = scaled,
+                                  .caller = caller, .svd_count = svd_count, .inv_diag_AtA = NULL, .inv_diag_AAt = NULL };
 
     primme_handle_t *handle_top = svd_sparse_allocate(&ctx, LinearOperator, GenericJacobiPreconditioner);
     primme_handle_t *handle_least = svd_sparse_allocate(&ctx, LinearOperator, GenericJacobiPreconditioner);
@@ -906,24 +911,26 @@ static int svd_sparse_main(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica
  * @brief Main routine to compute the SVD of the Jacobian matrix.
  *
  * Creates the SVD data structure, performs the SVD, calculates statistics,
- * and outputs the results. Currently computes the unscaled SVD.
+ * and outputs the results for the matrix supplied by the NLS callback.
  *
- * @param data       Pointer to simulation data.
- * @param nls_data   Pointer to the nonlinear system data.
- * @param values     Pointer to the matrix values to decompose.
- * @param scaled     Boolean if matrix is scaled (only for printout)
- * @param caller     Caller of the routine (only for printout)
- * @return return code: 0 = success
+ * @param data            Pointer to simulation data.
+ * @param nls_data        Pointer to the nonlinear system data.
+ * @param values          Pointer to the matrix values to decompose.
+ * @param sparse_pattern  CSC pattern for sparse values, NULL for dense values.
+ * @param scaled          Boolean if matrix is scaled (only for printout)
+ * @param caller          Caller of the routine (only for printout)
+ * @return                return code: 0 = success
  */
-int svd_compute(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, modelica_boolean scaled, SolverCaller caller)
+int svd_compute(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, const SPARSE_PATTERN *sparse_pattern,
+                modelica_boolean scaled, SolverCaller caller)
 {
     const char* cflags = omc_flagValue[FLAG_SVD_SPARSE_COUNT];
     int sparse_svd_count = (cflags ? atoi(cflags) : 0);
 
-    if (sparse_svd_count > 0)
+    if (sparse_svd_count > 0 && sparse_pattern)
     {
 #ifdef OMC_HAVE_PRIMME
-        return svd_sparse_main(data, nls_data, values, scaled, caller, sparse_svd_count);
+        return svd_sparse_main(data, nls_data, values, sparse_pattern, scaled, caller, sparse_svd_count);
 #else
         errorStreamPrint(OMC_LOG_STDOUT, 0, "Cannot call sparse SVD analysis, because OpenModelica was not build with PRIMME. "
                                             "Set FLAG_SVD_SPARSE_COUNT=0 to perform dense SVD or build OpenModelica with "
@@ -938,7 +945,7 @@ int svd_compute(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *valu
     }
     else
     {
-        return svd_dense_main(data, nls_data, values, scaled, caller);
+        return svd_dense_main(data, nls_data, values, sparse_pattern, scaled, caller);
     }
 }
 
@@ -1018,7 +1025,7 @@ void nlsJacobianRowColSums(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData, SUNMatrix
   infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "NLS eq index = " OMC_INT_FORMAT, nlsData->equationIndex);
   infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "Columns      = %d", size);
   infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "Rows         = %d", size);
-  infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "NNZ          = %u", nlsData->sparsePattern->nnz);
+  infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "NNZ          = %u", (unsigned int) nnz);
   infoStreamPrint(OMC_LOG_NLS_JAC_SUMS, 0, "Curr Time    = %-11.5e", data->localData[0]->timeValue);
   messageClose(OMC_LOG_NLS_JAC_SUMS);
 

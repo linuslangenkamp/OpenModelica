@@ -55,7 +55,6 @@
 #include "../arrayIndex.h"
 #include "external_input.h"
 #include "kinsolSolver.h"
-#include "kinsol_b.h"
 #include "newtonIteration.h"
 #include "nonlinearSystem.h"
 #include "omc_math.h"
@@ -946,6 +945,7 @@ int gbodef_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo, d
     struct dataSolver *solverData = gbfData->nlsData->solverData;
     // set number of non-linear variables and corresponding nominal values (changes dynamically during simulation)
     gbfData->nlsData->size = gbData->nFastStates;
+    gbfData->nlsData->solverSize = gbData->nFastStates;
     slowStateCache_invalidate(gbfData->slowStateCache);
 
     infoStreamPrint(OMC_LOG_GBODE, 1, "Fast states and corresponding nominal values:");
@@ -977,14 +977,8 @@ int gbodef_main(DATA *data, threadData_t *threadData, SOLVER_INFO *solverInfo, d
         /* Set NLS user data */
         NLS_USERDATA* nlsUserData = initNlsUserData(data, threadData, -1, gbfData->nlsData, gbfData->jacobian);
         nlsUserData->solverData = (void*) gbfData;
-        solverData->ordinaryData = (void*) nlsKinsolAllocate(gbfData->nlsData->size, nlsUserData, FALSE, !!gbfData->nlsData->sparsePattern);
-        break;
-      case GB_NLS_KINSOL_B:
-        B_nlsKinsolFree(solverData->ordinaryData);
-        /* Set NLS user data */
-        NLS_USERDATA* B_nlsUserData = initNlsUserData(data, threadData, -1, gbfData->nlsData, gbfData->jacobian);
-        B_nlsUserData->solverData = (void*) gbfData;
-        solverData->ordinaryData = (void*) B_nlsKinsolAllocate(gbfData->nlsData->size, B_nlsUserData, FALSE, !!gbfData->nlsData->sparsePattern);
+        gbfData->nlsData->userData = nlsUserData;
+        solverData->ordinaryData = (void*) nlsKinsolAllocate(gbfData->nlsData->size, nlsUserData, FALSE);
         break;
       case GB_NLS_INTERNAL:
         // notify internal to update the sparsity + symbolic factorization in the next iteration

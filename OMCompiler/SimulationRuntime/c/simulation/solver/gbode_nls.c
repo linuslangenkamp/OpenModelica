@@ -39,7 +39,6 @@
 #include "../arrayIndex.h"
 #include "solver_main.h"
 #include "kinsolSolver.h"
-#include "kinsol_b.h"
 #include "newtonIteration.h"
 #include "nonlinearSystem.h"
 
@@ -162,6 +161,7 @@ NONLINEAR_SYSTEM_DATA* allocNlsDataGB(threadData_t* threadData, const int size)
   assertStreamPrint(threadData, nlsData != NULL,"Out of memory");
 
   nlsData->size = size;
+  nlsData->solverSize = size;
 
   nlsData->nlsx              = (double*) malloc(nlsData->size*sizeof(double));
   nlsData->nlsxExtrapolation = (double*) malloc(nlsData->size*sizeof(double));
@@ -181,6 +181,7 @@ NONLINEAR_SYSTEM_DATA* allocNlsDataGB(threadData_t* threadData, const int size)
  */
 void freeNlsDataGB(NONLINEAR_SYSTEM_DATA* nlsData)
 {
+  nlsScalingFree(nlsData);
   free(nlsData->nlsx);
   free(nlsData->nlsxExtrapolation);
   free(nlsData->nlsxOld);
@@ -260,6 +261,8 @@ NONLINEAR_SYSTEM_DATA* initRK_NLS_DATA(DATA* data, threadData_t* threadData, DAT
   {
     gbData->jacobian = (JACOBIAN*) malloc(sizeof(JACOBIAN));
     initJacobian(gbData->jacobian, gbData->nlSystemSize, gbData->nlSystemSize, gbData->nlSystemSize, NULL, nlsData->analyticalJacobianColumn, NULL, nlsData->sparsePattern);
+    nlsScalingAllocate(nlsData, gbData->jacobian);
+    nlsScalingSetMethod(nlsData, NLS_SCALING_IDENTITY);
   }
   else
   {
@@ -272,6 +275,7 @@ NONLINEAR_SYSTEM_DATA* initRK_NLS_DATA(DATA* data, threadData_t* threadData, DAT
   /* Set NLS user data */
   NLS_USERDATA* nlsUserData = initNlsUserData(data, threadData, -1, nlsData, gbData->jacobian);
   nlsUserData->solverData = (void*) gbData;
+  nlsData->userData = nlsUserData;
 
   /* Initialize NLS method */
   switch (gbData->nlsSolverMethod) {
@@ -290,18 +294,7 @@ NONLINEAR_SYSTEM_DATA* initRK_NLS_DATA(DATA* data, threadData_t* threadData, DAT
     } else {
       nlsData->nlsLinearSolver = NLS_LS_DEFAULT;
     }
-    solverData->ordinaryData = (void*) nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE, !!nlsData->sparsePattern);
-    solverData->initHomotopyData = NULL;
-    nlsData->solverData = solverData;
-    break;
-  case GB_NLS_KINSOL_B:
-    nlsData->nlsMethod = NLS_KINSOL_B;
-    if (nlsData->sparsePattern) {
-      nlsData->nlsLinearSolver = NLS_LS_KLU;
-    } else {
-      nlsData->nlsLinearSolver = NLS_LS_DEFAULT;
-    }
-    solverData->ordinaryData = (void*) B_nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE, !!nlsData->sparsePattern);
+    solverData->ordinaryData = (void*) nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE);
     solverData->initHomotopyData = NULL;
     nlsData->solverData = solverData;
     break;
@@ -380,12 +373,17 @@ NONLINEAR_SYSTEM_DATA* initRK_NLS_DATA_MR(DATA* data, threadData_t* threadData, 
   gbfData->jacobian = (JACOBIAN*) malloc(sizeof(JACOBIAN));
   initJacobian(gbfData->jacobian, gbfData->nlSystemSize, gbfData->nlSystemSize, gbfData->nlSystemSize, jacobian_ODE->dag, nlsData->analyticalJacobianColumn, NULL, nlsData->sparsePattern);
   gbfData->jacobian->evalSelection = allocEvalSelection(gbfData->jacobian->dag);
+  if (gbfData->nlsSolverMethod != GB_NLS_INTERNAL) {
+    nlsScalingAllocate(nlsData, gbfData->jacobian);
+    nlsScalingSetMethod(nlsData, NLS_SCALING_IDENTITY);
+  }
   nlsData->initialAnalyticalJacobian = NULL;
   nlsData->jacobianIndex = -1;
 
   /* Set NLS user data */
   NLS_USERDATA* nlsUserData = initNlsUserData(data, threadData, -1, nlsData, gbfData->jacobian);
   nlsUserData->solverData = (void*) gbfData;
+  nlsData->userData = nlsUserData;
 
   /* Initialize NLS method */
   switch (gbfData->nlsSolverMethod) {
@@ -404,18 +402,7 @@ NONLINEAR_SYSTEM_DATA* initRK_NLS_DATA_MR(DATA* data, threadData_t* threadData, 
     } else {
       nlsData->nlsLinearSolver = NLS_LS_DEFAULT;
     }
-    solverData->ordinaryData = (void*) nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE, !!nlsData->sparsePattern);
-    solverData->initHomotopyData = NULL;
-    nlsData->solverData = solverData;
-    break;
-  case GB_NLS_KINSOL_B:
-    nlsData->nlsMethod = NLS_KINSOL_B;
-    if (nlsData->sparsePattern) {
-      nlsData->nlsLinearSolver = NLS_LS_KLU;
-    } else {
-      nlsData->nlsLinearSolver = NLS_LS_DEFAULT;
-    }
-    solverData->ordinaryData = (void*) B_nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE, !!nlsData->sparsePattern);
+    solverData->ordinaryData = (void*) nlsKinsolAllocate(nlsData->size, nlsUserData, FALSE);
     solverData->initHomotopyData = NULL;
     nlsData->solverData = solverData;
     break;
@@ -452,9 +439,6 @@ void freeRK_NLS_DATA(enum GB_NLS_METHOD method, NONLINEAR_SYSTEM_DATA* nlsData)
     break;
   case GB_NLS_KINSOL:
     nlsKinsolFree(dataSolver->ordinaryData);
-    break;
-  case GB_NLS_KINSOL_B:
-    B_nlsKinsolFree(dataSolver->ordinaryData);
     break;
   case GB_NLS_INTERNAL:
     gbInternalNlsFree(dataSolver->ordinaryData);
@@ -550,15 +534,9 @@ NLS_SOLVER_STATUS solveNLS_gb(DATA *data, threadData_t *threadData, NONLINEAR_SY
   {
     solved = gbInternalSolveNls(data, threadData, nlsData, gbData, solverData->ordinaryData);
   }
-  else if (method == GB_NLS_KINSOL || method == GB_NLS_KINSOL_B) {
+  else if (method == GB_NLS_KINSOL) {
     // Get kinsol data object
-    void* kin_mem;
-    if (method == GB_NLS_KINSOL){
-       kin_mem = ((NLS_KINSOL_DATA*)solverData->ordinaryData)->kinsolMemory;
-    }
-    else {
-       kin_mem = ((B_NLS_KINSOL_DATA*)solverData->ordinaryData)->kinsolMemory;
-    }
+    void* kin_mem = ((NLS_KINSOL_DATA*)solverData->ordinaryData)->kinsolMemory;
     if (maxJacUpdate[0] > 0) {
       set_kinsol_parameters(kin_mem, newtonMaxSteps, SUNTRUE, maxJacUpdate[0], newtonTol);
       solved = solveNLS(data, threadData, nlsData);

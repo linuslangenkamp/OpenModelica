@@ -40,9 +40,7 @@
 #include "../options.h"
 #include "sundials_util.h"
 #include "nonlinearSystem.h"
-#include "simulation_data.h"
 #include "sundials_error.h"
-#include "simulation_data.h"
 #include "util/simulation_options.h"
 
 #include <kinsol/kinsol.h>
@@ -56,29 +54,20 @@ extern "C" {
 // unify all the debug messages of them
 
 typedef enum SolverCaller {
-    KINSOL_JAC_EVAL,
-    KINSOL_ENTRY_POINT,
-    KINSOL_B_JAC_EVAL,
-    KINSOL_B_ENTRY_POINT
+    KINSOL_JAC_EVAL
 } SolverCaller;
 
 static inline const char* SolverCaller_toString(SolverCaller caller) {
     switch (caller) {
-        case KINSOL_JAC_EVAL:     return "kinsol: Jacobian eval";
-        case KINSOL_ENTRY_POINT:  return "kinsol: Kinsol entry point";
-        case KINSOL_B_JAC_EVAL:   return "experimental-kinsol: Jacobian eval";
-        case KINSOL_B_ENTRY_POINT:return "experimental-kinsol: Kinsol entry point";
-        default:                  return "UNKNOWN_SOLVER_CALLER";
+        case KINSOL_JAC_EVAL: return "kinsol: Jacobian eval";
+        default:              return "UNKNOWN_SOLVER_CALLER";
     }
 }
 
 static inline const char* SolverCaller_callerString(SolverCaller caller) {
     switch (caller) {
-        case KINSOL_JAC_EVAL:     return "kinsol";
-        case KINSOL_ENTRY_POINT:  return "kinsol";
-        case KINSOL_B_JAC_EVAL:   return "experimental-kinsol";
-        case KINSOL_B_ENTRY_POINT:return "experimental-kinsol";
-        default:                  return "UNKNOWN_SOLVER";
+        case KINSOL_JAC_EVAL: return "kinsol";
+        default:              return "UNKNOWN_SOLVER";
     }
 }
 
@@ -95,15 +84,15 @@ typedef struct SVD_DATA {
 
     modelica_boolean scaled;        // NLS is scaled
 
-    int rows;                       // #rows
-    int cols;                       // #columns
-    int min_rows_cols;              // min(#rows, #cols)
-    modelica_real  *A_dense;        // dense column-major matrix (m × n)
-    modelica_real  *S;              // singular values (min(m, n))
-    modelica_real  *U;              // left singular vectors (m × m if full)
-    modelica_real  *VT;             // right singular vectors transpose (n × n if full)
-    SPARSE_PATTERN *sparse_pattern; // sparse pattern
-    modelica_real  *sp_values;      // CSC values (same order as sp->index)
+    int rows;                             // #rows
+    int cols;                             // #columns
+    int min_rows_cols;                    // min(#rows, #cols)
+    modelica_real  *A_dense;              // dense column-major matrix (m × n)
+    modelica_real  *S;                    // singular values (min(m, n))
+    modelica_real  *U;                    // left singular vectors (m × m if full)
+    modelica_real  *VT;                   // right singular vectors transpose (n × n if full)
+    const SPARSE_PATTERN *sparse_pattern; // sparse pattern, NULL for dense input
+    modelica_real  *sp_values;            // CSC values (same order as sp->index)
 
     // statistics
     modelica_real sigma_max;        // largest singular value
@@ -120,7 +109,8 @@ static inline modelica_real _svd_max2(modelica_real a, modelica_real b)
 }
 
 // entry point for svd analysis
-int svd_compute(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, modelica_boolean scaled, SolverCaller caller);
+int svd_compute(DATA *data, NONLINEAR_SYSTEM_DATA *nls_data, modelica_real *values, const SPARSE_PATTERN *sparse_pattern,
+                modelica_boolean scaled, SolverCaller caller);
 
 // entry point for jacobian sums of abs rows and cols
 void nlsJacobianRowColSums(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData, SUNMatrix J,

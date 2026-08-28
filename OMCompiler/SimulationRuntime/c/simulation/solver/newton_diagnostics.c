@@ -52,8 +52,12 @@
  */
 
 #include "newton_diagnostics.h"
+
+#include <float.h>
+
 #include "../simulation_info_json.h"
 #include "../jacobian_util.h"
+#include "nonlinearSystem.h"
 
 extern int dgesv_(int *n, int *nrhs, double *a, int *lda,
                   int *ipiv, double *b, int *ldb, int *info);
@@ -104,13 +108,13 @@ double** MatMult( unsigned rA, unsigned cArB, unsigned cB, double** A, double** 
 
 // --------------------------------------------------------------------------------------------------------------------------------
 
-double** getJacobian( DATA* data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* systemData)
+double** getJacobian(NLS_USERDATA *userData, const double *x)
 {
   unsigned i, j;
+  threadData_t *threadData = userData->threadData;
+  NONLINEAR_SYSTEM_DATA *systemData = userData->nlsData;
   size_t m = systemData->size;
-  JACOBIAN* jacobian = NULL;
-
-  modelica_real* jac = NULL;
+  modelica_real *jac;
 
   // Allocate memory for fx (m * m matrix)
   double** fx = (double**)malloc(m * sizeof(double*)); // freed by the caller
@@ -126,25 +130,16 @@ double** getJacobian( DATA* data, threadData_t *threadData, NONLINEAR_SYSTEM_DAT
   // ...
   // variable n:   df_n/dv_1, df_2/dv_2, .... df_n/dv_n
 
-  if (systemData->jacobianIndex != -1) {
-    jacobian = &(data->simulationInfo->analyticJacobians[systemData->jacobianIndex]);
+  jac = (modelica_real*) malloc(m * m * sizeof(modelica_real));
+  assertStreamPrint(threadData, NULL != jac, "out of memory");
+  nlsJacobian(userData, x, jac, FALSE, NLS_JACOBIAN_AUTO);
 
-    jac = (modelica_real*) calloc(jacobian->sizeRows * jacobian->sizeCols, sizeof(modelica_real));
-    assertStreamPrint(threadData, NULL != jac, "out of memory");
+  /* copy jacobian from column-major to row-major */
+  for (i = 0; i < m; i++)
+    for (j = 0; j < m; j++)
+      fx[i][j] = jac[j*m + i];
 
-    /* call generic dense Jacobian */
-    evalJacobian(data, threadData, jacobian, NULL, jac, TRUE);
-
-    /* copy jacobian from column-major to row-major */
-    for (i = 0; i < jacobian->sizeRows; ++i)
-      for (j = 0; j < jacobian->sizeCols; ++j)
-        fx[i][j] = jac[j*jacobian->sizeRows + i];
-
-    free(jac);
-
-  } else {
-    assertStreamPrint(threadData, FALSE, "NEWTON_DIAGNOSTICS: numeric jacobian not yet supported.");
-  }
+  free(jac);
 
   return fx;
 }
@@ -235,15 +230,10 @@ double maxNonLinearResiduals( unsigned m, unsigned l, unsigned* z_idx,
 
 // --------------------------------------------------------------------------------------------------------------------------------
 
-double*** getHessian( DATA* data, threadData_t *threadData, unsigned sysNumber, unsigned m)
+double*** getHessian(NLS_USERDATA *userData, const double *x, unsigned m)
 {
-  NONLINEAR_SYSTEM_DATA* systemData = &(data->simulationInfo->nonlinearSystemData[sysNumber]);
-  JACOBIAN* jac = &(data->simulationInfo->analyticJacobians[systemData->jacobianIndex]);
-
   unsigned i, j, k;
-  const modelica_real eps = 1.e-7;
-  const modelica_real nominal_x = 1.e-4;
-  SIMULATION_DATA *sData = data->localData[0];
+  int iflag = 1;
 
   // Allocate memory for Hessian fxx (m * m * m doubles)
   double*** fxx = (double***)malloc(m * sizeof(double**));
@@ -257,69 +247,34 @@ double*** getHessian( DATA* data, threadData_t *threadData, unsigned sysNumber, 
     }
   }
 
-  // Allocate memory for Jacobians
-  double** fxPls = (double**)malloc(m * sizeof(double*));
-  assertStreamPrint(NULL, NULL != fxPls, "out of memory");
-  double** fxMin = (double**)malloc(m * sizeof(double*));
-  assertStreamPrint(NULL, NULL != fxMin, "out of memory");
-  for (i = 0; i < m; i++) {
-    fxPls[i] = (double*)malloc(m * sizeof(double));
-    assertStreamPrint(NULL, NULL != fxPls[i], "out of memory");
-    fxMin[i] = (double*)malloc(m * sizeof(double));
-    assertStreamPrint(NULL, NULL != fxMin[i], "out of memory");
-  }
-
-  // ----------------------------------------------- Debug -------------------------------------------------
-  /*printf( "\n");
-  for ( k = 0; k < m; k++) {
-    unsigned id = var_id(k, data, systemData);
-    printf( "               k = %d: id = %d (%s)\n", k, id, data->modelData->realVarsData[id].info.name);
-  }*/
-  // -------------------------------------------- end of Debug ---------------------------------------------
+  modelica_real *fxPls = (modelica_real*) malloc(m * m * sizeof(modelica_real));
+  modelica_real *fxMin = (modelica_real*) malloc(m * m * sizeof(modelica_real));
+  modelica_real *xPerturbed = (modelica_real*) malloc(m * sizeof(modelica_real));
+  assertStreamPrint(userData->threadData, fxPls && fxMin && xPerturbed, "out of memory");
 
   for (k = 0; k < m; k++) {
-    unsigned id = var_id(k, data, systemData);
-
-    double tmp_x = sData->realVars[id];
-    const modelica_real delta_x = eps * fmax( fabs(tmp_x), nominal_x);
-
-    sData->realVars[id] = tmp_x + delta_x;
-    for (j = 0; j < m; j++) {
-      jac->seedVars[j] = 1.0;
-      systemData->analyticalJacobianColumn(data, threadData, jac, NULL);
-      for (i = 0; i < m; i++)
-        fxPls[i][j] = jac->resultVars[i];
-      jac->seedVars[j] = 0.0;
-    }
-
-    sData->realVars[id] = tmp_x - delta_x;
-    for (j = 0; j < m; j++) {
-      jac->seedVars[j] = 1.0;
-      systemData->analyticalJacobianColumn(data, threadData, jac, NULL);
-      for (i = 0; i < m; i++)
-        fxMin[i][j] = jac->resultVars[i];
-      jac->seedVars[j] = 0.0;
-    }
-
-    sData->realVars[id] = tmp_x;
+    const modelica_real delta_x = cbrt(DBL_EPSILON) * (fabs(x[k]) + 1.0);
+    memcpy(xPerturbed, x, m * sizeof(modelica_real));
+    xPerturbed[k] += delta_x;
+    nlsJacobian(userData, xPerturbed, fxPls, FALSE, NLS_JACOBIAN_AUTO);
+    xPerturbed[k] -= 2.0 * delta_x;
+    nlsJacobian(userData, xPerturbed, fxMin, FALSE, NLS_JACOBIAN_AUTO);
 
     for (j = 0; j < m; j++)
       for (i = 0; i < m; i++) {
-        fxx[i][k][j] = (fxPls[i][j] - fxMin[i][j]) / (2 * delta_x);
+        fxx[i][k][j] = (fxPls[j*m + i] - fxMin[j*m + i]) / (2 * delta_x);
         if (isnan(fxx[i][k][j])) {
           infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "NaN detected: fxx[%d][%d][%d]: fxPls[%d][%d] = %f, fxMin[%d][%d] = %f, delta_x = %f\n",
-            i+1,j+1,k+1, i+1,j+1,fxPls[i][j], i+1,j+1,fxMin[i][j], delta_x);
-          return fxx;
+                          i+1,j+1,k+1, i+1,j+1,fxPls[j*m+i], i+1,j+1,fxMin[j*m+i], delta_x);
         }
       }
   }
 
-  for (i = 0; i < m; i++) {
-    free(fxPls[i]);
-    free(fxMin[i]);
-  }
+  /* Leave generated variables at the diagnostic reference point. */
+  nlsResidual(userData, x, fxPls, &iflag);
   free(fxPls);
   free(fxMin);
+  free(xPerturbed);
 
   // ----------------------------------------------- Debug -------------------------------------------------
   /*printf( "\n");
@@ -386,9 +341,8 @@ double*** calcGamma( unsigned m, unsigned p, unsigned q, unsigned* n_idx,
 
 // --------------------------------------------------------------------------------------------------------------------------------
 
-double* calcAlpha( DATA* data, threadData_t* threadData, unsigned sysNumber, unsigned m, unsigned p,
-                   unsigned q, unsigned* n_idx, unsigned* w_idx, double* x, double* dx,
-                   double* f, double*** fxx, double lambda, double maxRes)
+double* calcAlpha(NLS_USERDATA *userData, unsigned m, unsigned p, unsigned q, unsigned* n_idx, unsigned* w_idx,
+                  double* x, double* dx, double* f, double*** fxx, double lambda, double maxRes)
 {
   // Calculation of alpha coefficients for all non-linear equations
   // --------------------------------------------------------------
@@ -405,10 +359,8 @@ double* calcAlpha( DATA* data, threadData_t* threadData, unsigned sysNumber, uns
   // lambda: damping factor
   // maxRes: absolute maximum value of the non-linear residuals of iteration 0
 
-  RESIDUAL_USERDATA resUserData = {.data=data, .threadData=threadData, .solverData=NULL};
-  NONLINEAR_SYSTEM_DATA* systemData = &(data->simulationInfo->nonlinearSystemData[sysNumber]);
-
   unsigned i, j, k;
+  int iflag = 1;
 
   // Allocate memory for alpha (p doubles)
   double* alpha = (double*)malloc(p * sizeof(double));
@@ -423,7 +375,7 @@ double* calcAlpha( DATA* data, threadData_t* threadData, unsigned sysNumber, uns
   // Calculate residuals f_x1_star for damped guess x1_star
   double* f_x1_star = (double*)malloc(m * sizeof(double));
   assertStreamPrint(NULL, NULL != f_x1_star, "out of memory");
-  systemData->residualFunc(&resUserData, x1_star, f_x1_star, (int*)&systemData->size);
+  nlsResidual(userData, x1_star, f_x1_star, &iflag);
 
   // For each non-linear independent get w1_star - w0
   double* w1_star_w0 = (double*)malloc(q * sizeof(double));
@@ -979,15 +931,13 @@ void PrintResults( DATA* data, unsigned sysNumber, unsigned m, unsigned p, unsig
 
 // --------------------------------------------------------------------------------------------------------------------------------
 
-unsigned* getNonlinearEqns( DATA* data, threadData_t* threadData, unsigned sysNumber,
-                            unsigned m, double* f_x0, double* x0, double* dx, double* lambda, unsigned* p)
+unsigned* getNonlinearEqns(NLS_USERDATA *userData, unsigned m, double* f_x0, double* x0, double* dx, double* lambda, unsigned* p)
 {
   // If |f^i(x1)| > 0, then f^i is a nonlinear function
 
-  RESIDUAL_USERDATA resUserData = {.data=data, .threadData=threadData, .solverData=NULL};
-  NONLINEAR_SYSTEM_DATA* systemData = &(data->simulationInfo->nonlinearSystemData[sysNumber]);
-
   unsigned i;
+  int iflag = 1;
+  threadData_t *threadData = userData->threadData;
   double eps = 1.e-9;
 
   // Calculate x1 from NewtonFirstStep data dx
@@ -1006,7 +956,7 @@ unsigned* getNonlinearEqns( DATA* data, threadData_t* threadData, unsigned sysNu
 #endif
 
   // Calculate residuals f_x1 for x1
-  systemData->residualFunc(&resUserData, x1, f_x1, (int*)&systemData->size);
+  nlsResidual(userData, x1, f_x1, &iflag);
 
   failed = FALSE;
   // Catch
@@ -1031,7 +981,7 @@ unsigned* getNonlinearEqns( DATA* data, threadData_t* threadData, unsigned sysNu
     MMC_TRY_INTERNAL(simulationJumpBuffer)
 #endif
 
-    systemData->residualFunc(&resUserData, x1, f_x1, (int*)&systemData->size);
+    nlsResidual(userData, x1, f_x1, &iflag);
 
     failed = FALSE;
 #if !defined(OMC_EMCC)
@@ -1184,36 +1134,53 @@ void newtonDiagnostics(DATA* data, threadData_t *threadData, int sysNumber)
   // q: number of variables on which non-linear equations n(x) just depend
 
   NONLINEAR_SYSTEM_DATA* systemData = &(data->simulationInfo->nonlinearSystemData[sysNumber]);
+  JACOBIAN *jacobian = systemData->jacobianIndex != -1 ? &data->simulationInfo->analyticJacobians[systemData->jacobianIndex] : NULL;
+  NLS_USERDATA userData = {data, threadData, sysNumber, systemData, jacobian, NULL};
   unsigned m = systemData->size;
   unsigned i, j, k, p, q;
+  int iflag = 1;
+
+  if (jacobian && (jacobian->sizeRows != m || jacobian->sizeCols != m)) {
+    infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "Newton diagnostics skipped for non-square system " OMC_INT_FORMAT " (%u equations, %u unknowns).",
+                    systemData->equationIndex, (unsigned) jacobian->sizeRows, (unsigned) jacobian->sizeCols);
+    return;
+  }
 
   infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "Running newton diagnostics for system " OMC_INT_FORMAT, systemData->equationIndex);
 
   // Store all dependents in "x0" and function values as function of x0 in f
   double* x0 = (double*)malloc(m * sizeof(double));
   assertStreamPrint(NULL, NULL != x0, "out of memory");
-  double* f  = (double*)malloc(m * sizeof(double));
+  double* x0Physical = (double*)malloc(m * sizeof(double));
+  assertStreamPrint(NULL, NULL != x0Physical, "out of memory");
+  double* f = (double*)malloc(m * sizeof(double));
   assertStreamPrint(NULL, NULL != f, "out of memory");
-  for( i = 0; i < m; i++) {
-    x0[i] = systemData->nlsx[i];
-    f[i]  = systemData->resValues[i];
-  }
+  nlsScalingFinish(systemData);
+  memcpy(x0Physical, systemData->nlsx, m * sizeof(double));
+  nlsScalingPrepare(&userData, x0Physical, m, m);
+  memcpy(x0, systemData->scaling->z, m * sizeof(double));
+
+  iflag = 1;
+  nlsResidual(&userData, x0, f, &iflag);
 
   // Get Jacobian fx from system data
-  double** fx = getJacobian(data, threadData, systemData);
+  double** fx = getJacobian(&userData, x0);
 
   // Obtain Newton steps dx = -f(x0)/fx(x0)
   double* dx = getFirstNewtonStep(m, f, fx);
 
   // Get Hessian fxx from numerical differentiation of fx
-  double*** fxx = getHessian(data, threadData, sysNumber, m);
+  double*** fxx = getHessian(&userData, x0, m);
 
   // Obtain indices of non-linear functions "n" (p is the number of non-linear functions)
-  unsigned* n_idx = getNonlinearEqns(data, threadData, sysNumber, m, f, x0, dx, &lambda, &p);
+  unsigned* n_idx = getNonlinearEqns(&userData, m, f, x0, dx, &lambda, &p);
 
   if (p == 0) {
+    iflag = 1;
+    nlsResidual(&userData, x0, f, &iflag);
     infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "Newton diagnostics terminated: no non-linear equations!");
     free(x0);
+    free(x0Physical);
     free(f);
     free(dx);
     for (i = 0; i < m; i++)
@@ -1226,6 +1193,7 @@ void newtonDiagnostics(DATA* data, threadData_t *threadData, int sysNumber)
     }
     free(fxx);
     free(n_idx);
+    nlsScalingFinish(systemData);
     return;
   }
 
@@ -1251,25 +1219,25 @@ void newtonDiagnostics(DATA* data, threadData_t *threadData, int sysNumber)
   infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Vector x0 of unknowns");
   for (i = 0; i < m; i++) {
     if(m < 10)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%1d] = %14.10f  (%s)", i+1, x0[i],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%1d] = %14.10f  (%s)", i+1, x0Physical[i],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
     else if(m < 100)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%2d] = %14.10f  (%s)", i+1, x0[i],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%2d] = %14.10f  (%s)", i+1, x0Physical[i],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
     else if(m < 1000)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%3d] = %14.10f  (%s)", i+1, x0[i],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
-    else if(m < 100)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%4d] = %14.10f  (%s)", i+1, x0[i],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%3d] = %14.10f  (%s)", i+1, x0Physical[i],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
+    else if(m < 10000)
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%4d] = %14.10f  (%s)", i+1, x0Physical[i],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
     else
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%5d] = %14.10f  (%s)", i+1, x0[i],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "x0[%5d] = %14.10f  (%s)", i+1, x0Physical[i],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[i]);
   }
   messageClose(OMC_LOG_NLS_NEWTON_DIAGNOSTICS);
 
   // Prints residual function values at x0: vector f(x0)
-  infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Residual function values of all equations f(x0)");
+  infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Scaled residual function values of all equations f(x0)");
   for (i = 0; i < m; i++) {
     if (fabs(f[i]) > 1.e-9) {
       if (m < 10)
@@ -1290,49 +1258,49 @@ void newtonDiagnostics(DATA* data, threadData_t *threadData, int sysNumber)
   infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Vector w0 of nonlinear unknowns");
   for (i = 0; i < q; i++) {
     if (m < 10)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%1d] = x0[%1d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0[w_idx[i]],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%1d] = x0[%1d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0Physical[w_idx[i]],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
     else if (m < 100)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%2d] = x0[%2d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0[w_idx[i]],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%2d] = x0[%2d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0Physical[w_idx[i]],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
     else if (m < 1000)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%3d] = x0[%3d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0[w_idx[i]],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%3d] = x0[%3d] = %14.10f  (%s)", i+1, w_idx[i] + 1, x0Physical[w_idx[i]],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
     else if (m < 10000)
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%4d] = x0[%4d] = %14.10f  (%s)", i+q+1, w_idx[i] + 1, x0[w_idx[i]],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%4d] = x0[%4d] = %14.10f  (%s)", i+q+1, w_idx[i] + 1, x0Physical[w_idx[i]],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
     else
-      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%5d] = x0[%5d] = %14.10f  (%s)", i+q+1, w_idx[i] + 1, x0[w_idx[i]],
-        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
+      infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "w0[%5d] = x0[%5d] = %14.10f  (%s)", i+q+1, w_idx[i] + 1, x0Physical[w_idx[i]],
+                      modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[w_idx[i]]);
   }
   messageClose(OMC_LOG_NLS_NEWTON_DIAGNOSTICS);
 
   // Prints valuse of linear unknown vector z0 - printed indeces range from 1 to m (as in mathematics, not in C)
   if (m > q) {
-    infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Vector z0 of nonlinear unknowns");
+    infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Vector z0 of linear unknowns");
     for (i = 0; i < m-q; i++) {
       if (m - q < 10)
-        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%1d] = %14.10f  (%s)", i + 1, x0[z_idx[i]],
-          modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
+        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%1d] = %14.10f  (%s)", i + 1, x0Physical[z_idx[i]],
+                        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
       else if (m - q < 100)
-        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%2d] = %14.10f  (%s)", i + 1, x0[z_idx[i]],
-          modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
+        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%2d] = %14.10f  (%s)", i + 1, x0Physical[z_idx[i]],
+                        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
       else if (m - q < 1000)
-        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%3d] = %14.10f  (%s)", i + 1, x0[z_idx[i]],
-          modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
+        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%3d] = %14.10f  (%s)", i + 1, x0Physical[z_idx[i]],
+                        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
       else if (m - q < 10000)
-        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%4d] = %14.10f  (%s)", i + 1, x0[z_idx[i]],
-          modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
+        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%4d] = %14.10f  (%s)", i + 1, x0Physical[z_idx[i]],
+                        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
       else
-        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%5d] = %14.10f  (%s)", i + 1, x0[z_idx[i]],
-          modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
+        infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "z0[%5d] = %14.10f  (%s)", i + 1, x0Physical[z_idx[i]],
+                        modelInfoGetEquation(&data->modelData->modelDataXml, systemData->equationIndex).vars[z_idx[i]]);
     }
     messageClose(OMC_LOG_NLS_NEWTON_DIAGNOSTICS);
   }
 
   // Prints nonlinear residual function values at x0: vector n(x0)
-  infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Residual function values of all nonlinear equations n(w0)");
-  for (i = 0; i < p; ++i) {
+  infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 1, "Scaled residual function values of all nonlinear equations n(w0)");
+  for (i = 0; i < p; i++) {
     if (m < 10)
       infoStreamPrint(OMC_LOG_NLS_NEWTON_DIAGNOSTICS, 0, "n[%1d] = f[%1d] = %14.10f", i+1, n_idx[i]+1, f[n_idx[i]]);
     else if (m < 100)
@@ -1355,18 +1323,23 @@ void newtonDiagnostics(DATA* data, threadData_t *threadData, int sysNumber)
 
   double maxRes = maxNonLinearResiduals(m, m - q, z_idx, f, fx, dx);
 
-  double* alpha = calcAlpha(data, threadData, sysNumber, m, p, q, n_idx, w_idx, x0, dx, f, fxx, lambda, maxRes);
+  double* alpha = calcAlpha(&userData, m, p, q, n_idx, w_idx, x0, dx, f, fxx, lambda, maxRes);
 
   double*** Gamma_ijk = calcGamma(m, p, q, n_idx, w_idx, dx, fxx, maxRes);
 
   double** Sigma = calcSigma(m, q, w_idx, dx, fx, fxx);
 
-  PrintResults(data, sysNumber, m, p, q, n_idx, w_idx, x0, alpha, Gamma_ijk, Sigma);
+  PrintResults(data, sysNumber, m, p, q, n_idx, w_idx, x0Physical, alpha, Gamma_ijk, Sigma);
+
+  iflag = 1;
+  nlsResidual(&userData, x0, f, &iflag);
+  nlsScalingFinish(systemData);
 
   // --------------------------------------------------------------------------------------------------------------------------------
 
   // Free dynamically allocated memory
   free(x0);
+  free(x0Physical);
   free(f);
   free(dx);
 

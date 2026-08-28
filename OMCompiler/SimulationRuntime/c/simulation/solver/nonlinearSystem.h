@@ -58,6 +58,8 @@ typedef struct NLS_USERDATA {
                                          * Used in NLS solving of ODE integrator step. */
 } NLS_USERDATA;
 
+#include "nonlinearScaling.h"
+
 /**
  * @brief Store primary and secondary solvers in single NLS_USERDATA->solverData
  */
@@ -75,10 +77,13 @@ void printNonLinearSystemSolvingStatistics(NONLINEAR_SYSTEM_DATA* nonlinsys, enu
 NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nonlinsys);
 int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber);
 int check_nonlinear_solutions(DATA *data, int printFailingSystems);
-int print_csvLineIterStats(void* csvData, int size, int num,
-                           int iteration, double* x, double* f, double error_f,
-                           double error_fs, double delta_x, double delta_xs,
-                           double lambda);
+int print_csvLineIterStats(void *csvData, NONLINEAR_SYSTEM_DATA *nlsData, int size, int num, int iteration,
+                           const double *z, const double *g, double deltaX, double deltaZ, double errorF,
+                           double errorG, double lambda);
+void nlsPrintScaleFactors(const NLS_USERDATA *userData, int size, enum OMC_LOG_STREAM stream);
+void nlsPrintInitialGuess(const NLS_USERDATA *userData, const double *z, int size, enum OMC_LOG_STREAM stream);
+void nlsPrintStatus(const NLS_USERDATA *userData, const double *z, const double *g, int size, int functionEvaluations,
+                    double errorG, enum OMC_LOG_STREAM stream);
 void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA *nonlinsys, int sysNum);
 
 NLS_USERDATA* initNlsUserData(DATA* data, threadData_t* threadData, int sysNumber, NONLINEAR_SYSTEM_DATA* nlsData, JACOBIAN* analyticJacobian);

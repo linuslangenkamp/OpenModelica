@@ -42,32 +42,22 @@ extern "C" {
 typedef struct DATA_HYBRD
 {
   modelica_boolean initialized;
-  double* resScaling;
-  int useXScaling;
-  double* xScalefactors;
-  double* fvecScaled;
 
   integer n;
   double* x;
-  double* xSave;
-  double* xScaled;
   double* fvec;
-  double* fvecSave;
   double xtol;
   integer maxfev;
   int ml;
   int mu;
-  double epsfcn;
   double* diag;
-  double* diagres;
   integer mode;
   double factor;
   integer nprint;
   integer info;
   integer nfev;
   integer njev;
-  double* fjac;         /* Jacobian matrix in row-major order */
-  double* fjacobian;
+  double* fjac;         /* Jacobian matrix in column-major order */
   integer ldfjac;
   double* r__;
   integer lr;
@@ -80,16 +70,16 @@ typedef struct DATA_HYBRD
   unsigned int numberOfIterations; /* over the whole simulation time */
   unsigned int numberOfFunctionEvaluations; /* over the whole simulation time */
 
-  NLS_USERDATA* userData;        /* User data provided to KINSOL */
+  NLS_USERDATA* userData;
 
 } DATA_HYBRD;
 
 extern
-void hybrj_( void(*) (const integer*, const double*, double*, double *, const integer*, const integer*, void*),  const integer *n, double *x, double *fvec, double *fjac, const integer *ldfjac,
-  const double *xtol, const integer *axfev, double *diag, const integer *mode,
-  const double *factor, const integer *nprint, integer *info, integer *nfev, integer *njev,
-  double *r, integer *lr, double *qtf, double *wa1, double *wa2,
-  double *wa3, double *wa4, void* user_data);
+void hybrj_(void(*) (const integer*, const double*, double*, double*, const integer*, integer*, void*), const integer *n,
+            double *x, double *fvec, double *fjac, const integer *ldfjac, const double *xtol, const integer *axfev,
+            double *diag, const integer *mode, const double *factor, const integer *nprint, integer *info, integer *nfev,
+            integer *njev, double *r, integer *lr, double *qtf, double *wa1, double *wa2, double *wa3, double *wa4,
+            void *userData);
 
 DATA_HYBRD* allocateHybrdData(size_t size, NLS_USERDATA* userData);
 void freeHybrdData(DATA_HYBRD* hybrdData);
