@@ -81,8 +81,6 @@ typedef struct DATA_HOMOTOPY
 
   double error_f_sqrd;
 
-  double* minValue; /* min-attribute of variable, only pointer */
-  double* maxValue; /* max-attribute of variable, only pointer */
 
   /* used in wrapper_*/
   double* f1;
@@ -913,7 +911,10 @@ int solveSystemWithTotalPivotSearch(DATA *data, int n, double* x, double* A, int
    int pCol, pRow;
    double hValue;
    double hInt;
-   double absMax, detJac;
+   double absMax;
+   double matrixScale = 0.0;
+   double pivotTolerance;
+   double consistencyTolerance;
    int returnValue = 0;
 
    debugMatrixDouble(OMC_LOG_NLS_JAC,"Scaled Jacobian/residual matrix:",A, n, m);
@@ -935,9 +936,17 @@ int solveSystemWithTotalPivotSearch(DATA *data, int n, double* x, double* A, int
      nPivot = n+1;
    }
 
+   for (j = 0; j < nPivot; j++) {
+     for (i = 0; i < n; i++) matrixScale = fmax(matrixScale, fabs(A[i + j*n]));
+   }
+   pivotTolerance = DBL_EPSILON * fmax(1, nPivot) * matrixScale;
+   consistencyTolerance = data->simulationInfo->tolerance;
+   if (!isfinite(consistencyTolerance) || consistencyTolerance <= 0.0) consistencyTolerance = 1e-5;
+   consistencyTolerance = fmin(1e-6, fmax(1e-12, 0.1 * consistencyTolerance));
+
    for (i = 0; i < n; i++) {
     getIndicesOfPivotElement(&n, &nPivot, &i, A, indRow, indCol, &pRow, &pCol, &absMax);
-    if (absMax<DBL_EPSILON) {
+    if (absMax == 0.0 || absMax <= pivotTolerance) {
       *rank = i;
       if (data->simulationInfo->initial) {
         warningStreamPrint(OMC_LOG_NLS_V, 1, "Homotopy solver total pivot: Matrix (nearly) singular at initialization.");
@@ -973,17 +982,9 @@ int solveSystemWithTotalPivotSearch(DATA *data, int n, double* x, double* A, int
     }
   }
 
-  for (detJac=1.0,k=0; k<n; k++) detJac *= A[indRow[k] + indCol[k]*n];
-
   debugMatrixPermutedDouble(OMC_LOG_NLS_JAC,"Scaled Jacobian/residual matrix after decomposition",A, n, m, indRow, indCol);
-  debugDouble(OMC_LOG_NLS_JAC,"Determinant = ", detJac);
-  if (isnan(detJac)){
-    warningStreamPrint(OMC_LOG_NLS_V, 0, "Jacobian determinant is NaN.");
-    return -1;
-  }
-  else if (fabs(detJac) < 1e-9 && casualTearingSet)
-  {
-    debugString(OMC_LOG_DT, "The determinant of the casual tearing set is vanishing, let's fail if this is not the solution...");
+  if (*rank < n && casualTearingSet) {
+    debugString(OMC_LOG_DT, "The Jacobian of the casual tearing set is rank deficient; fail unless this is already a solution.");
     returnValue = 1;
   }
 
@@ -991,7 +992,7 @@ int solveSystemWithTotalPivotSearch(DATA *data, int n, double* x, double* A, int
   for (i=n-1;i>=0; i--) {
     if (i>=*rank) {
       /* this criteria should be evaluated and may be improved in future */
-      if (fabs(A[indRow[i] + indCol[n]*n])>1e-6) {
+      if (fabs(A[indRow[i] + indCol[n]*n]) > consistencyTolerance) {
         warningStreamPrint(OMC_LOG_NLS_V, 0, "under-determined linear system not solvable!");
         return -1;
       } else {
@@ -1030,8 +1031,6 @@ int linearSolverWrapper(DATA *data, int n, double* x, double* A, int* indRow, in
   int solverinfo;
   int nrhs = 1;
   int lda = n;
-  int k;
-  double detJac;
 
   debugMatrixDouble(OMC_LOG_NLS_JAC,"Scaled Jacobian/residual matrix:", A, n, n+1);
   debugVectorDouble(OMC_LOG_NLS_JAC,"Scaled residual vector:", x, n);
@@ -1067,10 +1066,7 @@ int linearSolverWrapper(DATA *data, int n, double* x, double* A, int* indRow, in
           (int*) &n,
           &solverinfo);
 
-      for (detJac=1.0, k=0; k<n; k++) detJac *= A[k + k*n];
-
       debugMatrixDouble(OMC_LOG_NLS_JAC,"Scaled Jacobian/residual matrix after decomposition:", A, n, n+1);
-      debugDouble(OMC_LOG_NLS_JAC,"Determinant = ", detJac);
 
       /* in case of failing */
       if (solverinfo != 0)
@@ -1078,11 +1074,6 @@ int linearSolverWrapper(DATA *data, int n, double* x, double* A, int* indRow, in
         /* debug information */
         debugString(OMC_LOG_NLS_V, "Linear lapack solver failed!!!");
         debugString(OMC_LOG_NLS_V, "******************************************************");
-      }
-      else if (fabs(detJac) < 1e-9 && casualTearingSet)
-      {
-        debugString(OMC_LOG_DT, "The determinant of the casual tearing set is vanishing, let's fail if this is not the solution...");
-        returnValue = 1;
       }
       else
       {
@@ -1121,6 +1112,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
   int  pos = solverData->n, rank;
   double error_f_sqrd, error_f1_sqrd, error_f2_sqrd;
   double delta_x_sqrd, grad_f;
+  double error_f, delta_x;
   int numberOfSmallSteps = 0;
   double error_f_old = 1e100;
   int countNegativeSteps = 0;
@@ -1132,7 +1124,6 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
   int firstrun;
   int constraintViolated;
   int solverinfo = 0;
-  int lastWasGood = 0; /* boolean, keeps track of previous x */
 
   int assert = 1;
   DATA* data = solverData->userData->data;
@@ -1151,6 +1142,12 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
 
   /* calculated error of function values */
   error_f_sqrd = vec2NormSqrd(solverData->n, solverData->f1);
+  error_f = nlsMaxNorm(solverData->f1, solverData->n);
+  if (error_f <= nlsData->scaling->convergence.fTol) {
+    solverData->info = 1;
+    solverData->error_f_sqrd = error_f_sqrd;
+    return 0;
+  }
 
   while(1)
   {
@@ -1228,7 +1225,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
       debugDouble(OMC_LOG_NLS_V, "Need to damp this!! lambda1 = ", lambda1);
       debugDouble(OMC_LOG_NLS_V, "Need to damp, error_f1 = ", sqrt(error_f1_sqrd));
       debugDouble(OMC_LOG_NLS_V, "Need to damp, forced error = ", error_f_sqrd + alpha*lambda1*grad_f);
-      if (error_f1_sqrd > error_f_sqrd + alpha*lambda1*grad_f && error_f_sqrd > 1e-12)
+      if (error_f1_sqrd > error_f_sqrd + alpha*lambda1*grad_f)
       {
         lambda2 = fmax(-lambda1*lambda1*grad_f/(2*(error_f1_sqrd-error_f_sqrd-lambda1*grad_f)),lambdaMin);
         debugDouble(OMC_LOG_NLS_V, "Need to damp this!! lambda2 = ", lambda2);
@@ -1260,7 +1257,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
           solverData->info = -1;
           break;
         }
-        if (error_f1_sqrd > error_f_sqrd + alpha*lambda2*grad_f && error_f_sqrd > 1e-12)
+        if (error_f1_sqrd > error_f_sqrd + alpha*lambda2*grad_f)
         {
           rhs1 = error_f1_sqrd - grad_f*lambda1 - error_f_sqrd;
           rhs2 = error_f2_sqrd - grad_f*lambda2 - error_f_sqrd;
@@ -1320,14 +1317,13 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
     /* update delta_x_sqrd, error_f_sqrd */
     for (i = 0; i < solverData->n; i++) solverData->debug_dx[i] = solverData->x1[i] - x[i];
     delta_x_sqrd = vec2NormSqrd(solverData->n, solverData->debug_dx);
+    delta_x = nlsRelativeStepNorm(solverData->x1, x, solverData->n);
 
     error_f_old = error_f_sqrd;
     error_f_sqrd = vec2NormSqrd(solverData->n, solverData->f1);
+    error_f = nlsMaxNorm(solverData->f1, solverData->n);
 
     countNegativeSteps += (error_f_sqrd > 10*error_f_old);
-    lastWasGood = error_f_sqrd >= error_f_old;
-
-
     /* debug information */
     if (omc_useStream[OMC_LOG_NLS_V]) {
       debugString(OMC_LOG_NLS_V, "error measurements:");
@@ -1362,19 +1358,13 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
     }
 
     /* solution found */
-    if (error_f_sqrd < solverData->ftol_sqrd && delta_x_sqrd < solverData->xtol_sqrd)
+    if (error_f <= nlsData->scaling->convergence.fTol ||
+        (delta_x <= nlsData->scaling->convergence.xTol &&
+         error_f <= nlsData->scaling->convergence.relaxedFTol))
     {
       solverData->info = 1;
 
-      /* reject new x if old x is as good, for stability (see issue #6419) */
-      if (lastWasGood)
-      {
-        debugString(OMC_LOG_NLS_V, "Note: newton solver rejected last x because previous was as good");
-      }
-      else
-      {
-        vecCopy(solverData->n, solverData->x1, x);
-      }
+      vecCopy(solverData->n, solverData->x1, x);
 
       /* update statistics */
       solverData->numberOfIterations += numberOfIterations;
@@ -1410,24 +1400,10 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
     /* check changes in unknown vector */
     if (delta_x_sqrd < solverData->xtol_sqrd || numberOfSmallSteps > 20)
     {
-      if (error_f_sqrd < solverData->ftol_sqrd*1e6)
-      {
-        solverData->info = 1;
-
-        /* debug information */
-        debugString(OMC_LOG_NLS_V, "NEWTON SOLVER DID CONVERGE TO A SOLUTION WITH LESS ACCURACY!!!");
-        printUnknowns(OMC_LOG_NLS_V, solverData);
-        debugString(OMC_LOG_NLS_V, "******************************************************");
-        solverData->error_f_sqrd = 0;
-
-      } else
-      {
-        solverData->info = -1;
-        debugString(OMC_LOG_NLS_V, "Warning: newton solver gets stuck!!!");
-        /* debug information */
-        debugString(OMC_LOG_NLS_V, "NEWTON SOLVER DID ---NOT--- CONVERGE TO A SOLUTION!!!");
-        debugString(OMC_LOG_NLS_V, "******************************************************");
-      }
+      solverData->info = -1;
+      debugString(OMC_LOG_NLS_V, "Warning: newton solver gets stuck before satisfying the residual criterion.");
+      debugString(OMC_LOG_NLS_V, "NEWTON SOLVER DID ---NOT--- CONVERGE TO A SOLUTION!!!");
+      debugString(OMC_LOG_NLS_V, "******************************************************");
       /* update statistics */
       solverData->numberOfIterations += numberOfIterations;
       break;
@@ -1699,10 +1675,11 @@ static int homotopyAlgorithm(DATA_HOMOTOPY* solverData, double *x)
     if (solverData->yt[solverData->n] == 1)
     {
       debugString(OMC_LOG_NLS_HOMOTOPY, "Force '-homBacktraceStrategy=fix' and fix lambda, because this is the last step!");
-      debugDouble(OMC_LOG_NLS_HOMOTOPY, "Set tolerance homHEps to newtonFTol =", newtonFTol);
+      debugDouble(OMC_LOG_NLS_HOMOTOPY, "Set tolerance homHEps to the common NLS residual tolerance =",
+                  solverData->userData->nlsData->scaling->convergence.fTol);
       correctorStrategy = 1;
       pos = solverData->n;
-      hEps = newtonFTol;
+      hEps = solverData->userData->nlsData->scaling->convergence.fTol;
     }
 
     if (correctorStrategy==1)
@@ -1872,8 +1849,9 @@ static int homotopyAlgorithm(DATA_HOMOTOPY* solverData, double *x)
       infoStreamPrint(OMC_LOG_INIT_HOMOTOPY, 0, "homotopy parameter lambda = %g", solverData->y0[solverData->n]);
   else
       infoStreamPrint(OMC_LOG_NLS_HOMOTOPY, 0, "homotopy parameter lambda = %g", solverData->y0[solverData->n]);
-  /* copy solution back to vector x */
-  vecCopy(solverData->n, solverData->y1, x);
+  /* Keep the homotopy parameter together with the final physical unknowns.
+   * The common final validator must evaluate the same lambda point. */
+  vecCopy(solverData->m, solverData->y1, x);
 
   debugString(OMC_LOG_NLS_HOMOTOPY, "HOMOTOPY ALGORITHM SUCCEEDED");
   if (solverData->initHomotopy) {
@@ -1897,7 +1875,7 @@ static int homotopyAlgorithm(DATA_HOMOTOPY* solverData, double *x)
  * @param data                Pointer to data struct.
  * @param threadData          Pointer to thread data.
  * @param nlsData             Non-linear system data.
-* @return NLS_SOLVER_STATUS   Return NLS_SOLVED on success and NLS_FAILED otherwise.
+ * @return NLS_SOLVER_STATUS  Common nonlinear solver status.
  */
 NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nlsData)
 {
@@ -1936,9 +1914,9 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
   homotopyData->eqSystemNumber = nlsData->equationIndex;
   homotopyData->mixedSystem = mixedSystem;
   homotopyData->timeValue = data->localData[0]->timeValue;
-  homotopyData->minValue = scaling->zMin;
-  homotopyData->maxValue = scaling->zMax;
   homotopyData->info = 0;
+  homotopyData->ftol_sqrd = scaling->convergence.fTol * scaling->convergence.fTol;
+  homotopyData->xtol_sqrd = scaling->convergence.xTol * scaling->convergence.xTol;
 
   if (!homotopyData->initHomotopy) {
     int indexes[2] = {1,eqSystemNumber};
@@ -2010,11 +1988,10 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
       /* Try to get out of here!!! */
       error_f_sqrd = vec2NormSqrd(homotopyData->n, homotopyData->f1);
 
-      if (error_f_sqrd < homotopyData->ftol_sqrd*1e-4)
+      if (nlsMaxNorm(homotopyData->f1, homotopyData->n) <= scaling->convergence.fTol)
       {
         success = NLS_SOLVED;
-        /* take the solution */
-        vecCopy(homotopyData->n, homotopyData->x0, scaling->z);
+        vecCopy(homotopyData->m, homotopyData->x0, homotopyData->x);
         /* reset continous flag */
         data->simulationInfo->solveContinuous = 0;
         assert = 0;
@@ -2145,8 +2122,6 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
       }
       if (success == NLS_SOLVED)
       {
-        /* take the solution */
-        vecCopy(homotopyData->n, homotopyData->x, scaling->z);
         /* reset continous flag */
         data->simulationInfo->solveContinuous = 0;
         break;
@@ -2217,8 +2192,6 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
       giveUp = runHomotopy>=3;
 
     } else if (homotopyData->initHomotopy && homotopyData->info==1) {
-      /* take the solution */
-      vecCopy(homotopyData->n, homotopyData->x, scaling->z);
       printUnknowns(OMC_LOG_NLS_V, homotopyData);
       success = NLS_SOLVED;
     }
@@ -2261,6 +2234,8 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
       }
     }
   }
+  success = nlsValidateCandidate(homotopyData->userData, homotopyData->x, NULL,
+                                 success == NLS_SOLVED && homotopyData->info == 1, "Homotopy");
   if (success != NLS_SOLVED)
   {
     debugString(OMC_LOG_NLS_V,"Homotopy solver did not converge!");

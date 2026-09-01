@@ -50,7 +50,6 @@ extern "C" {
 
 /* constants */
 #define RETRY_MAX 5
-#define FTOL_WITH_LESS_ACCURACY 1.e-6
 
 /* readability */
 typedef enum initialMode {
@@ -74,8 +73,6 @@ typedef struct NLS_KINSOL_DATA {
   double scsteptol;                    /* step tolerance */
   double maxstepfactor;                /* maximum Newton step factor in common solver coordinates */
   double mxnstepin;                    /* Maximum allowable scaled length of Newton step */
-  modelica_boolean resetTol;           /* True if solution with less accuracy was accepted.
-                                          Need to reset KINSOL  */
 
   /* ### work arrays ### */
   N_Vector initialGuess;

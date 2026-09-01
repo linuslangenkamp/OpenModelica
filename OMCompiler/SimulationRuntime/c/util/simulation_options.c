@@ -554,18 +554,18 @@ const char *FLAG_DETAILED_DESC[FLAG_MAX+1] = {
   /* FLAG_MOO_L2BN_P2_LEVEL */
   "  Value specifies the phase II refinement aggressiveness for L2-Boundary-Norm mesh refinement in MOO",
   /* FLAG_NEWTON_FTOL */
-  "  Tolerance respecting residuals for updating solution vector in Newton solver.\n"
-  "  Solution is accepted if the (scaled) 2-norm of the residuals is smaller than the tolerance newtonFTol and the (scaled) newton correction (delta_x) is smaller than the tolerance newtonXTol.\n"
-  "  The value is a Double with default value 1e-12.",
+  "  Explicit scaled-residual tolerance override for algebraic nonlinear solvers.\n"
+  "  If unset, the runtime derives the tolerance from the requested simulation tolerance.\n"
+  "  The value is a positive Double.",
   /* FLAG_NEWTON_MAX_STEPS */
   "  Maximum number of newton steps, used currently only by KINSOL in solver GBODE.",
   /* FLAG_NEWTON_MAX_STEP_FACTOR */
   "  Maximum newton step factor mxnewtstep = maxStepFactor * norm2(xScaling)."
   "  Used currently only by KINSOL.",
   /* FLAG_NEWTON_XTOL */
-  "  Tolerance respecting newton correction (delta_x) for updating solution vector in Newton solver.\n"
-  "  Solution is accepted if the (scaled) 2-norm of the residuals is smaller than the tolerance newtonFTol and the (scaled) newton correction (delta_x) is smaller than the tolerance newtonXTol.\n"
-  "  The value is a Double with default value 1e-12.",
+  "  Explicit relative-step tolerance override for algebraic nonlinear solvers.\n"
+  "  A small step is accepted only together with an integrator-level residual bound. If unset, the runtime derives the tolerance from the requested simulation tolerance.\n"
+  "  The value is a positive Double.",
   /* FLAG_NEWTON_JAC_UPDATES */
   "  Number of steps before Jacobian is recomputed. If zero is chosen, the corresponding solution phase is skipped.",
   /* FLAG_NEWTON_STRATEGY */
