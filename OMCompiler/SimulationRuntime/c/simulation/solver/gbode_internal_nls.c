@@ -589,9 +589,7 @@ static void createGbScales(GB_INTERNAL_NLS_DATA *nls, DATA_GBODE *gbData, double
   {
     for (int i = 0; i < nls->size; i++)
     {
-      const double weight = nls->integrator_tol *
-                            (fabs(nominals[i]) + fmax(fabs(y1[i]), fabs(y2[i])));
-      nls->scal[i] = isfinite(weight) && weight > 0.0 ? 1.0 / weight : INFINITY;
+      nls->scal[i] = 1.0 / (nls->integrator_tol * nominals[i] + fmax(fabs(y1[i]), fabs(y2[i])) * nls->integrator_tol);
     }
   }
   else
@@ -599,9 +597,7 @@ static void createGbScales(GB_INTERNAL_NLS_DATA *nls, DATA_GBODE *gbData, double
     for (int i = 0; i < nls->size; i++)
     {
       const size_t fast_idx = (size_t) gbData->fastStatesIdx[i];
-      const double weight = nls->integrator_tol *
-                            (fabs(nominals[fast_idx]) + fmax(fabs(y1[i]), fabs(y2[i])));
-      nls->scal[i] = isfinite(weight) && weight > 0.0 ? 1.0 / weight : INFINITY;
+      nls->scal[i] = 1.0 / (nls->integrator_tol * nominals[fast_idx] + fmax(fabs(y1[i]), fabs(y2[i])) * nls->integrator_tol);
     }
   }
 }
@@ -762,7 +758,7 @@ static NLS_SOLVER_STATUS gbInternalSolveNls_DIRK(DATA *data,
 
     // handle absorption effects
     nrm_x = gbScalesNorm(nls, x, 1);
-    modelica_boolean absorption = isfinite(nrm_x) && (nrm_delta <= DBL_ABSORPTION * nrm_x);
+    modelica_boolean absorption = (nrm_delta <= DBL_ABSORPTION * nrm_x);
 
     if (newt_it > 1)
     {
@@ -781,7 +777,7 @@ static NLS_SOLVER_STATUS gbInternalSolveNls_DIRK(DATA *data,
       nls->etas[stage] = pow(fmax(nls->etas[stage], DBL_EPSILON), nls->eta_inital_damping);
     }
 
-    if (!isfinite(nls->etas[stage]) || !isfinite(nrm_delta) || !isfinite(nrm_x))
+    if (!isfinite(nls->etas[stage]) || !isfinite(nrm_delta))
     {
       // Inf or NaN detected
       // Either RHS or Jacobian or solution of the system contained a Inf or NaN
@@ -1291,7 +1287,7 @@ static NLS_SOLVER_STATUS gbInternalSolveNls_T_Transform(DATA *data,
 
     // handle absorption effects
     nrm_x = gbScalesNormXPlusZ(nls, yOld, nls->Z, transform->size);
-    modelica_boolean absorption = isfinite(nrm_x) && (nrm_delta <= DBL_ABSORPTION * nrm_x);
+    modelica_boolean absorption = (nrm_delta <= DBL_ABSORPTION * nrm_x);
 
     if (newt_it > 1)
     {
@@ -1311,7 +1307,7 @@ static NLS_SOLVER_STATUS gbInternalSolveNls_T_Transform(DATA *data,
       *nls->etas = pow(fmax(*nls->etas, DBL_EPSILON), nls->eta_inital_damping);
     }
 
-    if (!isfinite(*nls->etas) || !isfinite(nrm_delta) || !isfinite(nrm_x))
+    if (!isfinite(*nls->etas) || !isfinite(nrm_delta))
     {
       // Inf or NaN detected
       // Either RHS or Jacobian or solution of the system contained a Inf or NaN

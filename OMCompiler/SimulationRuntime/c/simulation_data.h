@@ -379,9 +379,9 @@ typedef struct NLS_USERDATA NLS_USERDATA;
 typedef struct NLS_SCALING_DATA NLS_SCALING_DATA;
 
 typedef enum {
-  NLS_FAILED = 0,                   /* NLS solver failed to produce an acceptable candidate */
-  NLS_SOLVED = 1,                   /* NLS solver accepted the candidate using the common convergence policy */
-  NLS_RETRY = 2                     /* Finite candidate, but not accurate enough; retry/step reduction required */
+  NLS_FAILED = 0,                   /* NLS Solver failed to solve system */
+  NLS_SOLVED = 1,                   /* NLS Solver solved system successfully */
+  NLS_SOLVED_LESS_ACCURACY = 2      /* NLS Solver found a solution with low accuracy */
 } NLS_SOLVER_STATUS;
 
 #if !defined(OMC_NUM_NONLINEAR_SYSTEMS) || OMC_NUM_NONLINEAR_SYSTEMS>0
@@ -437,7 +437,7 @@ typedef struct NONLINEAR_SYSTEM_DATA
   modelica_real *resValues;            /* memory space for evaluated residual values */
   NLS_SCALING_DATA *scaling;           /* Solver-coordinate view and common NLS callback work memory */
 
-  NLS_SOLVER_STATUS solved;            /* Common nonlinear solver result status */
+  NLS_SOLVER_STATUS solved;            /* Specifiex if the NLS could be solved (with less accuracy) or failed */
   modelica_real lastTimeSolved;        /* save last successful solved point in time */
 
   modelica_boolean logActive;          /* Specifies whether LOG_XXX should print for this system.

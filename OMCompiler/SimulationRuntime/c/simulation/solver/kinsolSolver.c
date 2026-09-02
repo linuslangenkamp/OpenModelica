@@ -74,6 +74,8 @@ static void nlsKinsolConfigSetup(NLS_KINSOL_DATA *kinsolData) {
   flag = KINSetFuncNormTol(kinsolData->kinsolMemory,
                            kinsolData->fnormtol); /* Set function-norm stopping tolerance */
   checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetFuncNormTol");
+  kinsolData->resetTol = FALSE;
+
   flag = KINSetScaledStepTol(kinsolData->kinsolMemory,
                              kinsolData->scsteptol); /* Set scaled-step stopping tolerance */
   checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetScaledStepTol");
@@ -82,9 +84,6 @@ static void nlsKinsolConfigSetup(NLS_KINSOL_DATA *kinsolData) {
                            100 * kinsolData->size); /* Set max. number of nonlinear iterations */
   checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetNumMaxIters");
 
-  flag = KINSetMaxSetupCalls(kinsolData->kinsolMemory, 10);
-  checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetMaxSetupCalls");
-
   kinsolData->kinsolStrategy = KIN_LINESEARCH; /* Newton with globalization strategy to solve nonlinear systems */
 
   flag = KINSetNoInitSetup(kinsolData->kinsolMemory, SUNFALSE); /* TODO: This is the default value. Is there a point in calling this function? */
@@ -92,8 +91,6 @@ static void nlsKinsolConfigSetup(NLS_KINSOL_DATA *kinsolData) {
 
   kinsolData->retries = 0;
   kinsolData->countResCalls = 0;
-  kinsolData->maxstepfactor = maxStepFactor;
-  kinsolData->jacobianMethod = NLS_JACOBIAN_AUTO;
 }
 
 /**
@@ -672,37 +669,6 @@ static void nlsKinsolConfigPrint(NLS_KINSOL_DATA *kinsolData) {
   infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL linear solver %d", kinsolData->linearSolverMethod);
 }
 
-static modelica_boolean nlsKinsolConfigureRetry(DATA *data, NONLINEAR_SYSTEM_DATA *nlsData,
-                                                NLS_KINSOL_DATA *kinsolData)
-{
-  switch (kinsolData->retries) {
-  case 0:
-    /* Retry the current iterate with a fresh setup. */
-    break;
-  case 1:
-    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
-    kinsolData->kinsolStrategy = KIN_LINESEARCH;
-    break;
-  case 2:
-    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
-    kinsolData->kinsolStrategy = KIN_NONE;
-    break;
-  case 3:
-    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
-    KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
-    kinsolData->kinsolStrategy = KIN_LINESEARCH;
-    break;
-  case 4:
-    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
-    KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
-    kinsolData->kinsolStrategy = KIN_LINESEARCH;
-    break;
-  default:
-    return FALSE;
-  }
-  return TRUE;
-}
-
 /**
  * @brief Try to handle errors of KINSol().
  *
@@ -717,6 +683,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
                                               NLS_KINSOL_DATA *kinsolData) {
   int flag;             /* KIN_* and KINLS_* codes, which are plain macros */
   SUNErrCode sunFlag;   /* SUNLinearSolver codes, which are not */
+  double fNorm;
   long outL;
 
   flag = KINSetNoInitSetup(kinsolData->kinsolMemory, SUNFALSE);
@@ -774,7 +741,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
   case KIN_LINIT_FAIL:
     errorStreamPrint(OMC_LOG_STDOUT, 0,
                      "KINSOL: The linear solver's initialization function failed.\n");
-    return FALSE;
+    return errorCode;
   case KIN_LSETUP_FAIL:
     /* In case something goes wrong with the symbolic jacobian try the numerical */
     warningStreamPrint(OMC_LOG_NLS_V, 0,
@@ -796,7 +763,52 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
     break;
   }
 
-  return nlsKinsolConfigureRetry(data, nlsData, kinsolData);
+  /* check if the current solution is sufficient anyway */
+  KINGetFuncNorm(kinsolData->kinsolMemory, &fNorm);
+  if (fNorm < FTOL_WITH_LESS_ACCURACY) {
+    warningStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL: Move forward with a less accurate solution.");
+    KINSetFuncNormTol(kinsolData->kinsolMemory, FTOL_WITH_LESS_ACCURACY);
+    KINSetScaledStepTol(kinsolData->kinsolMemory, FTOL_WITH_LESS_ACCURACY);
+    kinsolData->resetTol = TRUE;
+    return TRUE;
+  } else {
+    warningStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL: Current scaled residual norm = %f", fNorm);
+  }
+
+  /* reconfigure kinsol for another try */
+  switch (kinsolData->retries) {
+  case 0:
+    /* Retry the current iterate with a fresh setup. */
+    break;
+  case 1:
+    /* Retry line search from old values. */
+    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
+    kinsolData->kinsolStrategy = KIN_LINESEARCH;
+    break;
+  case 2:
+    /* Retry without line search from the extrapolated point. */
+    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
+    kinsolData->kinsolStrategy = KIN_NONE;
+    break;
+  case 3:
+    /* Retry exact Newton from the extrapolated point. */
+    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
+    KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
+    kinsolData->kinsolStrategy = KIN_LINESEARCH;
+    break;
+  case 4:
+    /* Retry exact Newton from old values. */
+    nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_OLDVALUES);
+    KINSetMaxSetupCalls(kinsolData->kinsolMemory, 1);
+    kinsolData->kinsolStrategy = KIN_LINESEARCH;
+    break;
+  default:
+    /* Too many retries */
+    return FALSE;
+    break;
+  }
+
+  return TRUE;
 }
 
 /**
@@ -818,28 +830,12 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
   long nFEval;
   modelica_boolean success = FALSE;
   modelica_boolean retry = TRUE;
-  NLS_SOLVER_STATUS candidateStatus = NLS_FAILED;
-  NLS_SOLVER_STATUS bestStatus = NLS_FAILED;
   double *xStart = NV_DATA_S(kinsolData->initialGuess);
 
   infoStreamPrintWithEquationIndexes(OMC_LOG_NLS_V, omc_dummyFileInfo, 1, indexes,
     "Start solving Non-Linear System %d (size %d) at time %g with Kinsol Solver",
     eqSystemNumber, (int) nlsData->size, data->localData[0]->timeValue);
 
-  kinsolData->fnormtol = scaling->convergence.fTol;
-  kinsolData->scsteptol = scaling->convergence.xTol;
-  if (kinsolData->attemptRetry) {
-    nlsKinsolConfigSetup(kinsolData);
-  } else {
-    flag = KINSetFuncNormTol(kinsolData->kinsolMemory, kinsolData->fnormtol);
-    checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetFuncNormTol");
-    flag = KINSetScaledStepTol(kinsolData->kinsolMemory, kinsolData->scsteptol);
-    checkReturnFlag_SUNDIALS(flag, SUNDIALS_KIN_FLAG, "KINSetScaledStepTol");
-    kinsolData->countResCalls = 0;
-    kinsolData->retries = 0;
-    kinsolData->jacobianMethod = NLS_JACOBIAN_AUTO;
-    kinsolData->maxstepfactor = maxStepFactor;
-  }
   nlsKinsolResetInitial(data, kinsolData, nlsData, INITIAL_EXTRAPOLATION);
   nlsKinsolSetMaxNewtonStep(kinsolData, kinsolData->maxstepfactor);
   kinsolData->jacobianMethod = NLS_JACOBIAN_AUTO;
@@ -861,18 +857,13 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
     } else {
       infoStreamPrint(OMC_LOG_NLS_V, 0, "KINSol finished with errorCode %d.", flag);
     }
-    candidateStatus = nlsValidateCandidate(kinsolData->userData, xStart, NULL,
-                                           flag == KIN_STEP_LT_STPTOL, "KINSOL");
-    success = candidateStatus == NLS_SOLVED;
-    if (candidateStatus == NLS_RETRY) bestStatus = NLS_RETRY;
+    /* Try to handle recoverable errors */
+    retry = flag < 0 && kinsolData->attemptRetry && nlsKinsolErrorHandler(flag, data, nlsData, kinsolData);
 
-    /* KINSOL return values are termination reasons. The common validator decides acceptance. */
-    if (!success && flag < 0) {
-      retry = kinsolData->attemptRetry && nlsKinsolErrorHandler(flag, data, nlsData, kinsolData);
-    } else if (!success) {
-      retry = kinsolData->attemptRetry && nlsKinsolConfigureRetry(data, nlsData, kinsolData);
-    } else {
-      retry = FALSE;
+    /* solution found */
+    if ((flag == KIN_SUCCESS) || (flag == KIN_INITIAL_GUESS_OK) ||
+        (flag == KIN_STEP_LT_STPTOL)) {
+      success = TRUE;
     }
     kinsolData->retries++;
 
@@ -883,10 +874,28 @@ NLS_SOLVER_STATUS nlsKinsolSolve(DATA* data, threadData_t* threadData, NONLINEAR
 
     infoStreamPrint(OMC_LOG_NLS_V, 0, "Next try? success = %d, retry = %d, retries = %d = %s\n",
                     success, retry, kinsolData->retries,
-                    !success && retry && kinsolData->retries < RETRY_MAX ? "true" : "false");
+                    !success && !retry && kinsolData->retries < RETRY_MAX ? "true" : "false");
   } while (!success && retry && kinsolData->retries < RETRY_MAX);
 
-  kinsolData->solved = success ? NLS_SOLVED : bestStatus;
+  /* Check solution status */
+  if (success && kinsolData->resetTol) {
+    kinsolData->solved = NLS_SOLVED_LESS_ACCURACY;
+  } else if (success) {
+    kinsolData->solved = NLS_SOLVED;
+  } else {
+    kinsolData->solved = NLS_FAILED;
+  }
+
+  /* Reset solver tolerance */
+  if (kinsolData->resetTol) {
+    KINSetFuncNormTol(kinsolData->kinsolMemory, kinsolData->fnormtol);
+    KINSetScaledStepTol(kinsolData->kinsolMemory,  kinsolData->scsteptol);
+    kinsolData->resetTol = FALSE;
+  }
+
+  if (success) {
+    memcpy(scaling->z, xStart, kinsolData->size * sizeof(double));
+  }
 
   messageClose(OMC_LOG_NLS_V);
 

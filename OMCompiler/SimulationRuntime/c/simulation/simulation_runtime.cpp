@@ -1181,20 +1181,12 @@ int initRuntimeAndSimulation(int argc, char**argv, DATA *data, threadData_t *thr
   }
   if(omc_flag[FLAG_NEWTON_XTOL]) {
     newtonXTol = atof(omc_flagValue[FLAG_NEWTON_XTOL]);
-    if (!std::isfinite(newtonXTol) || newtonXTol <= 0.0) {
-      throwStreamPrint(threadData, "Invalid -newtonXTol value '%s'; expected a positive finite number.",
-                       omc_flagValue[FLAG_NEWTON_XTOL]);
-    }
-    infoStreamPrint(OMC_LOG_STDOUT, 0, "Relative-step tolerance for algebraic nonlinear solvers changed to %g", newtonXTol);
+    infoStreamPrint(OMC_LOG_STDOUT, 0, "Tolerance for updating solution vector in Newton solver changed to %g", newtonXTol);
   }
 
   if(omc_flag[FLAG_NEWTON_FTOL]) {
     newtonFTol = atof(omc_flagValue[FLAG_NEWTON_FTOL]);
-    if (!std::isfinite(newtonFTol) || newtonFTol <= 0.0) {
-      throwStreamPrint(threadData, "Invalid -newtonFTol value '%s'; expected a positive finite number.",
-                       omc_flagValue[FLAG_NEWTON_FTOL]);
-    }
-    infoStreamPrint(OMC_LOG_STDOUT, 0, "Scaled-residual tolerance for algebraic nonlinear solvers changed to %g", newtonFTol);
+    infoStreamPrint(OMC_LOG_STDOUT, 0, "Tolerance for accepting accuracy in Newton solver changed to %g", newtonFTol);
   }
 
   if(omc_flag[FLAG_NEWTON_MAX_STEPS]) {
@@ -1204,7 +1196,7 @@ int initRuntimeAndSimulation(int argc, char**argv, DATA *data, threadData_t *thr
 
   if(omc_flag[FLAG_NEWTON_MAX_STEP_FACTOR]) {
     maxStepFactor = atof(omc_flagValue[FLAG_NEWTON_MAX_STEP_FACTOR]);
-    infoStreamPrint(OMC_LOG_STDOUT, 0, "Maximum step size factor for a Newton step changed to %g", maxStepFactor);
+    infoStreamPrint(OMC_LOG_STDOUT, 0, "Maximum step size factor for a Newton step changed to %g", newtonFTol);
   }
 
   if(omc_flag[FLAG_NEWTON_JAC_UPDATES]) {

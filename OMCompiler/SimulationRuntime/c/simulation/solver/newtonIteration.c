@@ -58,7 +58,7 @@ int LineSearch(double* x, genericResidualFunc f, double current_fvec_enorm, int 
                DATA_NEWTON* solverData, NLS_USERDATA* userdata);
 int Backtracking(double* x, genericResidualFunc f, double current_fvec_enorm, int n, double* fvec,
                  DATA_NEWTON* solverData, NLS_USERDATA* userdata);
-void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double fTol, double xTol);
+void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double* eps);
 
 /* Extern function prototypes */
 
@@ -155,20 +155,17 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
   int n = solverData->n;    /* size of equation */
   double *x = solverData->x;
   double *fvec = solverData->fvec;
-  const double fTol = solverData->ftol;
-  const double xTol = solverData->xtol;
+  double *eps = &(solverData->ftol);  /* tolerance for x */
   int * maxfev = &(solverData->maxfev);
   double *fjac = solverData->fjac;
   int *iwork = solverData->iwork;
   int *info = &(solverData->info);
   int calc_jac = 1;
 
-  double error_f = 1.0 + fTol, delta_x = INFINITY;
-  double delta_f = INFINITY, delta_x_scaled = INFINITY;
+  double error_f = 1.0 + *eps, delta_x = 1.0 + *eps;
+  double delta_f = 1.0 + *eps, delta_x_scaled = 1.0 + *eps;
   double lambda = 1.0;
-  double current_fvec_enorm;
-
-  solverData->nfev = 0;
+  double current_fvec_enorm, enorm_new;
 
   if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
   {
@@ -193,14 +190,9 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
   /* save current fvec in f_old*/
   memcpy(solverData->f_old, fvec, n*sizeof(double));
 
-  error_f = nlsMaxNorm(fvec, n);
-  current_fvec_enorm = enorm_(&n, fvec);
-  if (!isfinite(error_f)) {
-    *info = -1;
-    goto finish;
-  }
+  error_f = current_fvec_enorm = enorm_(&n, fvec);
 
-  while(error_f > fTol)
+  while(error_f > *eps && delta_x > *eps && delta_f > *eps && delta_x_scaled > *eps)
   {
     if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V))
     {
@@ -300,29 +292,10 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
       /* updating f_old */
       memcpy(solverData->f_old, fvec, n*sizeof(double));
 
-      current_fvec_enorm = enorm_(&n, fvec);
-
-      if (!isfinite(error_f) || !isfinite(delta_x_scaled) || !isfinite(delta_f)) {
-        *info = -1;
-        break;
-      }
-      if (error_f > fTol && delta_x_scaled <= xTol) {
-        *info = 2;
-        infoStreamPrint(OMC_LOG_NLS_V, 0,
-                        "Newton iteration stagnated with scaled max residual %e and relative step %e.",
-                        error_f, delta_x_scaled);
-        break;
-      }
-      if (error_f > fTol && delta_f <= fTol) {
-        *info = 3;
-        infoStreamPrint(OMC_LOG_NLS_V, 0,
-                        "Newton iteration stagnated with scaled max residual %e and residual change %e.",
-                        error_f, delta_f);
-        break;
-      }
+      current_fvec_enorm = error_f;
 
       /* check if maximum iteration is reached */
-      if (++l >= *maxfev)
+      if (++l > *maxfev)
       {
         *info = -1;
         if (solverData->initial) {
@@ -347,7 +320,7 @@ int _omc_newton(genericResidualFunc f, DATA_NEWTON* solverData, void* userData)
       for(i = 0; i < n; i++)
         infoStreamPrint(OMC_LOG_NLS_V, 0, "z[%d] = %e ", i, x[i]);
       messageClose(OMC_LOG_NLS_V);
-      printErrors(delta_x, delta_x_scaled, delta_f, error_f, fTol, xTol);
+      printErrors(delta_x, delta_x_scaled, delta_f, error_f, eps);
     }
   }
 
@@ -370,18 +343,20 @@ finish:
  * @param error_f         Scaled residual norm.
  * @param eps
  */
-void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double fTol, double xTol)
+void printErrors(double delta_x, double delta_x_scaled, double delta_f, double error_f, double* eps)
 {
   infoStreamPrint(OMC_LOG_NLS_V, 1, "errors ");
   infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_z = %e \nrelative_delta_z = %e \ndelta_g = %e \nerror_g = %e",
                   delta_x, delta_x_scaled, delta_f, error_f);
 
-  if (delta_x_scaled <= xTol)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "relative_delta_z reached xTol");
-  if (delta_f <= fTol)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_g reached fTol");
-  if (error_f <= fTol)
-    infoStreamPrint(OMC_LOG_NLS_V, 0, "error_g reached fTol");
+  if (delta_x < *eps)
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_z reached eps");
+  if (delta_x_scaled < *eps)
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "relative_delta_z reached eps");
+  if (delta_f < *eps)
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "delta_g reached eps");
+  if (error_f < *eps)
+    infoStreamPrint(OMC_LOG_NLS_V, 0, "error_g reached eps");
 
   messageClose(OMC_LOG_NLS_V);
 }
@@ -447,20 +422,28 @@ void calculatingErrors(DATA_NEWTON* solverData, double* delta_x, double* delta_x
                        double* error_f, int n, double* x, double* fvec)
 {
   int i=0;
-  /* delta_x = max(abs(x_new-x_old)) */
+  double scaling_factor;
+
+  /* delta_x = || x_new-x_old || */
   for (i=0; i<n; i++)
     solverData->delta_x_vec[i] = x[i]-solverData->x_new[i];
 
-  *delta_x = nlsMaxNorm(solverData->delta_x_vec, n);
-  *delta_x_scaled = nlsRelativeStepNorm(solverData->x_new, x, n);
+  *delta_x = enorm_(&n,solverData->delta_x_vec);
+
+  scaling_factor = enorm_(&n,x);
+  if (scaling_factor > 1) {
+    *delta_x_scaled = *delta_x * 1./ scaling_factor;
+  } else {
+    *delta_x_scaled = *delta_x;
+  }
 
   /* delta_f = || f_old - f_new || */
   for (i=0; i<n; i++)
     solverData->delta_f[i] = solverData->f_old[i]-fvec[i];
 
-  *delta_f = nlsMaxNorm(solverData->delta_f, n);
+  *delta_f=enorm_(&n, solverData->delta_f);
 
-  *error_f = nlsMaxNorm(fvec, n);
+  *error_f = enorm_(&n,fvec);
 }
 
 /*! \fn damping_heuristic

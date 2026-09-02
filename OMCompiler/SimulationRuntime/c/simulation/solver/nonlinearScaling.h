@@ -19,7 +19,6 @@ extern "C" {
 typedef enum NLS_SCALING_METHOD {
   NLS_SCALING_IDENTITY = 0,
   NLS_SCALING_NOMINAL,
-  NLS_SCALING_RESIDUAL,
   NLS_SCALING_JACOBIAN
 } NLS_SCALING_METHOD;
 
@@ -27,14 +26,6 @@ typedef enum NLS_JACOBIAN_METHOD {
   NLS_JACOBIAN_AUTO = 0,
   NLS_JACOBIAN_NUMERICAL
 } NLS_JACOBIAN_METHOD;
-
-typedef struct NLS_CONVERGENCE_DATA {
-  modelica_real fTol;
-  modelica_real xTol;
-  modelica_real relaxedFTol;
-  modelica_real residualNorm;
-  modelica_real stepNorm;
-} NLS_CONVERGENCE_DATA;
 
 struct NLS_SCALING_DATA {
   /* Solver-coordinate view of NONLINEAR_SYSTEM_DATA. */
@@ -61,7 +52,6 @@ struct NLS_SCALING_DATA {
   size_t jacobianCapacity;
   NLS_SCALING_METHOD method;
   NLS_SCALING_METHOD activeMethod;
-  NLS_CONVERGENCE_DATA convergence;
   modelica_boolean prepared;
 };
 
@@ -72,11 +62,6 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
 void nlsScalingFinish(NONLINEAR_SYSTEM_DATA *nlsData);
 modelica_real nlsScalingPhysicalX(const NONLINEAR_SYSTEM_DATA *nlsData, modelica_integer index, modelica_real z);
 modelica_real nlsScalingPhysicalResidual(const NONLINEAR_SYSTEM_DATA *nlsData, modelica_integer index, modelica_real g);
-modelica_real nlsMaxNorm(const modelica_real *values, modelica_integer size);
-modelica_real nlsRelativeStepNorm(const modelica_real *z, const modelica_real *zPrevious, modelica_integer size);
-NLS_SOLVER_STATUS nlsValidateCandidate(NLS_USERDATA *userData, const modelica_real *z,
-                                      const modelica_real *zPrevious, modelica_boolean stepConverged,
-                                      const char *solverName);
 
 int nlsResidual(NLS_USERDATA *userData, const modelica_real *z, modelica_real *g, const int *iflag);
 int nlsJacobian(NLS_USERDATA *userData, const modelica_real *z, modelica_real *jacobian, modelica_boolean sparse,

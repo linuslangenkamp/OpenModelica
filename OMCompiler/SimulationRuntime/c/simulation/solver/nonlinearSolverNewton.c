@@ -54,6 +54,7 @@ int wrapper_fvec_newton(int n, double* x, double* fvec, NLS_USERDATA* userData, 
 
 /* External function prototypes */
 
+extern double enorm_(int *n, double *x);
 extern int dgesv_(int *n, int *nrhs, doublereal *a, int *lda, int *ipiv, doublereal *b, int *ldb, int *info);
 
 
@@ -99,7 +100,7 @@ int wrapper_fvec_newton(int n, double* x, double* fvec, NLS_USERDATA* userData, 
  * @param data                Runtime data struct.
  * @param threadData          Thread data for error handling.
  * @param nlsData             Pointer to non-linear system data.
- * @return NLS_SOLVER_STATUS  Common nonlinear solver status.
+ * @return NLS_SOLVER_STATUS  Return NLS_SOLVED on success and NLS_FAILED otherwise.
  */
 NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nlsData)
 {
@@ -108,14 +109,14 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
 
   int eqSystemNumber = 0;
   int i;
-  double xerror_scaled = INFINITY;
+  double xerror_scaled = -1;
   NLS_SOLVER_STATUS success = NLS_FAILED;
-  NLS_SOLVER_STATUS bestStatus = NLS_FAILED;
-  NLS_SOLVER_STATUS candidateStatus;
   int nfunc_evals = 0;
+  double local_tol = solverData->ftol;
 
   int giveUp = 0;
   int retries = 0;
+  int retries2 = 0;
   int nonContinuousCase = 0;
   modelica_boolean *relationsPreBackup = NULL;
   int casualTearingSet = nlsData->strictTearingFunctionCall != NULL;
@@ -128,8 +129,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
 
   relationsPreBackup = (modelica_boolean*) malloc(data->modelData->nRelations*sizeof(modelica_boolean));
 
-  solverData->ftol = scaling->convergence.fTol;
-  solverData->xtol = scaling->convergence.xTol;
+  solverData->nfev = 0;
 
   /* try to calculate jacobian only once at the beginning of the iteration */
   solverData->calculate_jacobian = 0;
@@ -173,24 +173,23 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
     giveUp = 1;
     solverData->newtonStrategy = data->simulationInfo->newtonStrategy;
     _omc_newton((genericResidualFunc*)wrapper_fvec_newton, solverData, solverData->userData);
-    candidateStatus = nlsValidateCandidate(solverData->userData, solverData->x, NULL,
-                                           solverData->info == 2, "Newton");
-    if (candidateStatus == NLS_RETRY) bestStatus = NLS_RETRY;
-    xerror_scaled = scaling->convergence.residualNorm;
 
     /* check for proper inputs */
     if(solverData->info == 0)
       printErrorEqSyst(IMPROPER_INPUT, modelInfoGetEquation(&data->modelData->modelDataXml,eqSystemNumber), data->localData[0]->timeValue);
 
     /* reset non-contunuousCase */
-    if(nonContinuousCase && xerror_scaled > scaling->convergence.fTol)
+    if(nonContinuousCase && xerror_scaled > local_tol)
     {
       memcpy(data->simulationInfo->relationsPre, relationsPreBackup, sizeof(modelica_boolean)*data->modelData->nRelations);
       nonContinuousCase = 0;
     }
 
+    /* check for error  */
+    xerror_scaled = enorm_(&solverData->n, solverData->fvec);
+
     /* solution found */
-    if(candidateStatus == NLS_SOLVED)
+    if(xerror_scaled <= local_tol && solverData->info > 0)
     {
       success = NLS_SOLVED;
       nfunc_evals += solverData->nfev;
@@ -202,6 +201,9 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
                        xerror_scaled, OMC_LOG_NLS_V);
         messageClose(OMC_LOG_NLS_V);
       }
+
+      /* take the solution */
+      memcpy(scaling->z, solverData->x, solverData->n*(sizeof(double)));
 
       /* Then try with old values (instead of extrapolating )*/
     }
@@ -261,6 +263,18 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       nfunc_evals += solverData->nfev;
       infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t try to solve a discontinuous system.");
     }
+    else if(retries2 < 4)
+    {
+      memcpy(solverData->x, scaling->zOld, solverData->n*(sizeof(double)));
+      /* reduce tolarance */
+      local_tol = local_tol*10;
+
+      retries = 0;
+      retries2++;
+      giveUp = 0;
+      nfunc_evals += solverData->nfev;
+      infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t reduce the tolerance slightly to %e.", local_tol);
+    }
     else
     {
       printErrorEqSyst(ERROR_AT_TIME, modelInfoGetEquation(&data->modelData->modelDataXml,eqSystemNumber), data->localData[0]->timeValue);
@@ -279,5 +293,5 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
   nlsData->numberOfFEval = solverData->numberOfFunctionEvaluations;
   nlsData->numberOfIterations = solverData->numberOfIterations;
 
-  return success == NLS_SOLVED ? success : bestStatus;
+  return success;
 }

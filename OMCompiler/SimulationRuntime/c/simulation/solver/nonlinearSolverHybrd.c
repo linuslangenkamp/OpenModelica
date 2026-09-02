@@ -49,6 +49,8 @@ extern "C" {
 #include "nonlinearSystem.h"
 #include "nonlinearSolverHybrd.h"
 
+extern double enorm_(integer *n, double *x);
+
 static void wrapper_fvec_hybrj(const integer *n_p, const double *x, double *f, double *fjac, const integer *ldjac, integer *iflag, void *userData);
 
 /**
@@ -231,7 +233,7 @@ static void wrapper_fvec_hybrj(const integer *n_p, const double *x, double *f, d
  * @param data                Runtime data struct.
  * @param threadData          Thread data for error handling.
  * @param nlsData             Pointer to non-linear system data.
- * @return NLS_SOLVER_STATUS  Common nonlinear solver status.
+ * @return NLS_SOLVER_STATUS  Return NLS_SOLVED on success and NLS_FAILED otherwise.
  */
 NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nlsData)
 {
@@ -241,11 +243,10 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
 
   int i;
   integer iflag = 1;
-  double xerror_scaled = INFINITY;
+  double xerror_scaled;
   NLS_SOLVER_STATUS success = NLS_FAILED;
-  NLS_SOLVER_STATUS bestStatus = NLS_FAILED;
-  NLS_SOLVER_STATUS candidateStatus = NLS_FAILED;
   modelica_boolean catchedError;
+  double local_tol = 1e-12;
   double initial_factor = hybrdData->factor;
   int nfunc_evals = 0;
   modelica_boolean continuous = TRUE;
@@ -254,6 +255,7 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
   int giveUp = 0;
   int retries = 0;
   int retries2 = 0;
+  int retries3 = 0;
   int assertCalled = 0;
   int assertRetries = 0;
   int assertMessage = 0;
@@ -263,7 +265,6 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
   relationsPreBackup = (modelica_boolean*) malloc(data->modelData->nRelations*sizeof(modelica_boolean));
 
   hybrdData->numberOfFunctionEvaluations = 0;
-  hybrdData->xtol = scaling->convergence.xTol;
 
   // Initialize lambda variable
   if (nlsData->homotopySupport) {
@@ -296,7 +297,10 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
   /* start solving loop */
   while(!giveUp && !success)
   {
-    candidateStatus = NLS_FAILED;
+    /* constrain x */
+    for(i=0; i<hybrdData->n; i++)
+      hybrdData->x[i] = fmax(scaling->zMin[i], fmin(hybrdData->x[i], scaling->zMax[i]));
+
     printVector(hybrdData->x, hybrdData->n, OMC_LOG_NLS_V, "scaled iteration variables");
 
     /* set residual function continuous */
@@ -399,20 +403,17 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
 
     if(hybrdData->info != -1)
     {
-      xerror_scaled = nlsMaxNorm(hybrdData->fvec, hybrdData->n);
-      candidateStatus = nlsValidateCandidate(hybrdData->userData, hybrdData->x, NULL,
-                                             hybrdData->info == 1, "Hybrid");
-      if (candidateStatus == NLS_RETRY) bestStatus = NLS_RETRY;
+      xerror_scaled = enorm_(&hybrdData->n, hybrdData->fvec);
     }
 
     /* reset non-contunuousCase */
-    if(nonContinuousCase && xerror_scaled > scaling->convergence.fTol)
+    if(nonContinuousCase && xerror_scaled > local_tol)
     {
       memcpy(data->simulationInfo->relationsPre, relationsPreBackup, sizeof(modelica_boolean)*data->modelData->nRelations);
       nonContinuousCase = 0;
     }
 
-    if(hybrdData->info < 4 && candidateStatus != NLS_SOLVED)
+    if(hybrdData->info < 4 && xerror_scaled > local_tol)
       hybrdData->info = 4;
 
     if (hybrdData->info >= 2 && hybrdData->info <= 5) {
@@ -421,14 +422,40 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
     }
 
     /* solution found */
-    if(candidateStatus == NLS_SOLVED)
+    if(hybrdData->info == 1 || xerror_scaled <= local_tol)
     {
       success = NLS_SOLVED;
       nfunc_evals += hybrdData->nfev;
       if (OMC_ACTIVE_STREAM(OMC_LOG_NLS_V)){
         infoStreamPrint(OMC_LOG_NLS_V, 1, "System solved");
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "%d retries\n%d restarts", retries, retries2);
+        infoStreamPrint(OMC_LOG_NLS_V, 0, "%d retries\n%d restarts", retries, retries2+retries3);
         messageClose(OMC_LOG_NLS_V);
+      }
+      /* take the solution */
+      memcpy(scaling->z, hybrdData->x, hybrdData->n*(sizeof(double)));
+
+      /* try */
+      {
+        catchedError = TRUE;
+#ifndef OMC_EMCC
+        MMC_TRY_INTERNAL(simulationJumpBuffer)
+#endif
+        wrapper_fvec_hybrj(&hybrdData->n, hybrdData->x, hybrdData->fvec, hybrdData->fjac, &hybrdData->ldfjac,
+                           &iflag, hybrdData->userData);
+        catchedError = FALSE;
+#ifndef OMC_EMCC
+        MMC_CATCH_INTERNAL(simulationJumpBuffer)
+#endif
+        /* catch */
+        if (catchedError) {
+          warningStreamPrint(OMC_LOG_STDOUT, 0, "Non-Linear Solver try to handle a problem with a called assert.");
+
+          hybrdData->info = 4;
+          xerror_scaled = 1;
+          assertCalled = 1;
+          success = NLS_FAILED;
+          giveUp = 0;
+        }
       }
     }
     else if((hybrdData->info == 4 || hybrdData->info == 5) && assertRetries < 1+hybrdData->n && assertCalled)
@@ -444,8 +471,9 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
       {
         for(i=0; i<hybrdData->n; i++)
         {
-          if(hybrdData->x[i] == 0)
+          if(scaling->z[i] == 0)
           {
+            scaling->z[i] = scaling->zNominal[i];
             hybrdData->x[i] = scaling->zNominal[i];
           }
         }
@@ -586,6 +614,29 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
       if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V)) {
         infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t try nominal values as initial point.");
       }
+    /* try to reduce the tolerance a bit */
+    } else if((hybrdData->info == 4 || hybrdData->info == 5) && retries3 < 6) {
+      /* set x vector */
+      if(data->simulationInfo->discreteCall)
+        memcpy(hybrdData->x, scaling->z, hybrdData->n*(sizeof(double)));
+      else
+        memcpy(hybrdData->x, scaling->zExtrapolation, hybrdData->n*(sizeof(double)));
+
+      /* reduce tolarance */
+      local_tol = local_tol*10;
+
+      hybrdData->factor = initial_factor;
+      hybrdData->mode = 2;
+
+      retries = 0;
+      retries2 = 0;
+      retries3++;
+
+      giveUp = 0;
+      nfunc_evals += hybrdData->nfev;
+      if(OMC_ACTIVE_STREAM(OMC_LOG_NLS_V)) {
+        infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t reduce the tolerance slightly to %e.", local_tol);
+      }
     } else if(hybrdData->info >= 2 && hybrdData->info <= 5) {
 
       /* while the initialization it's ok to every time a solution */
@@ -593,8 +644,11 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
         printErrorEqSyst(ERROR_AT_TIME, modelInfoGetEquation(&data->modelData->modelDataXml, eqSystemNumber), data->localData[0]->timeValue);
       }
       if (OMC_ACTIVE_STREAM(OMC_LOG_NLS_V)) {
-        infoStreamPrint(OMC_LOG_NLS_V, 0, "### No Solution! ###\n after %d retries and %d restarts", retries, retries2);
+        infoStreamPrint(OMC_LOG_NLS_V, 0, "### No Solution! ###\n after %d restarts", retries*retries2*retries3);
       }
+      /* take the best approximation */
+      memcpy(scaling->z, hybrdData->x, hybrdData->n*(sizeof(double)));
+
       giveUp = 1;
       success = NLS_FAILED;
       break;
@@ -612,7 +666,7 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
 
   free(relationsPreBackup);
 
-  return success == NLS_SOLVED ? success : bestStatus;
+  return success;
 }
 
 #ifdef __cplusplus
