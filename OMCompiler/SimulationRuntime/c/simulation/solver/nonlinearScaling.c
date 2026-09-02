@@ -333,6 +333,7 @@ int nlsJacobian(NLS_USERDATA *userData, const modelica_real *z, modelica_real *j
 static modelica_boolean tryReferenceJacobian(NLS_USERDATA *userData, modelica_boolean sparse)
 {
   NLS_SCALING_DATA *scaling = userData->nlsData->scaling;
+  threadData_t *threadData = userData->threadData;
   volatile modelica_boolean failed = TRUE;
 
 #ifndef OMC_EMCC
@@ -399,7 +400,7 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
   const SPARSE_PATTERN *pattern;
   modelica_boolean sparse;
   size_t required;
-  modelica_integer column;
+  modelica_integer column, row;
   modelica_integer attempt;
   modelica_boolean haveReferenceJacobian = FALSE;
   static const modelica_real perturbation[] = {0.0, 0.01, 0.1};
