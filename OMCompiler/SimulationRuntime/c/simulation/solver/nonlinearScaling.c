@@ -138,6 +138,11 @@ modelica_real nlsScalingPhysicalResidual(const NONLINEAR_SYSTEM_DATA *nlsData, m
   return g / nlsData->scaling->fScale[index];
 }
 
+modelica_real nlsRelaxedTolerance(const DATA *data, modelica_real strictTolerance)
+{
+  return fmax(1000.0 * strictTolerance, fmin(data->simulationInfo->tolerance, 1e-6));
+}
+
 void nlsScalingFree(NONLINEAR_SYSTEM_DATA *nlsData)
 {
   NLS_SCALING_DATA *scaling = nlsData->scaling;
@@ -277,10 +282,26 @@ int nlsJacobian(NLS_USERDATA *userData, const modelica_real *z, modelica_real *j
   NLS_SCALING_DATA *scaling = nlsData->scaling;
   JACOBIAN *analytic = userData->analyticJacobian;
   const SPARSE_PATTERN *pattern = nlsJacobianPattern(userData);
+  size_t jacobianSize;
   int iflag = 1;
 
   assertStreamPrint(userData->threadData, scaling != NULL && scaling->prepared, "Nonlinear scaling must be prepared before Jacobian evaluation");
   assertStreamPrint(userData->threadData, !sparse || pattern != NULL, "Sparse nonlinear Jacobian has no sparsity pattern");
+  jacobianSize = sparse ? pattern->nnz : scaling->equations * scaling->unknowns;
+
+  if (scaling->referenceJacobianValid) {
+    const modelica_boolean reuse = method == NLS_JACOBIAN_AUTO &&
+                                   sparse == scaling->referenceJacobianSparse &&
+                                   jacobianSize == scaling->referenceJacobianSize &&
+                                   memcmp(z, scaling->zWork, nlsData->size * sizeof(modelica_real)) == 0;
+    scaling->referenceJacobianValid = FALSE;
+    if (reuse) {
+      if (jacobian != scaling->jacobianWork) {
+        memcpy(jacobian, scaling->jacobianWork, jacobianSize * sizeof(modelica_real));
+      }
+      return 0;
+    }
+  }
 
   if (method == NLS_JACOBIAN_AUTO && analytic && analytic->evalColumn &&
       analytic->sizeRows == scaling->equations && analytic->sizeCols >= scaling->unknowns && analytic->sizeCols <= scaling->size) {
@@ -309,6 +330,67 @@ int nlsJacobian(NLS_USERDATA *userData, const modelica_real *z, modelica_real *j
   return numericalJacobian(userData, z, jacobian, sparse);
 }
 
+static modelica_boolean tryReferenceJacobian(NLS_USERDATA *userData, modelica_boolean sparse)
+{
+  NLS_SCALING_DATA *scaling = userData->nlsData->scaling;
+  volatile modelica_boolean failed = TRUE;
+
+#ifndef OMC_EMCC
+  MMC_TRY_INTERNAL(simulationJumpBuffer)
+#endif
+  failed = nlsJacobian(userData, scaling->zWork, scaling->jacobianWork, sparse, NLS_JACOBIAN_AUTO) != 0;
+#ifndef OMC_EMCC
+  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+#endif
+  return !failed;
+}
+
+static void scaleReferenceJacobian(NLS_USERDATA *userData, modelica_boolean sparse)
+{
+  NLS_SCALING_DATA *scaling = userData->nlsData->scaling;
+  const SPARSE_PATTERN *pattern = nlsJacobianPattern(userData);
+  modelica_integer column, row;
+  unsigned int nz;
+
+  for (row = 0; row < scaling->equations; row++) scaling->fScale[row] = 0.0;
+  if (sparse) {
+    for (column = 0; column < scaling->unknowns; column++) {
+      for (nz = pattern->leadindex[column]; nz < pattern->leadindex[column + 1]; nz++) {
+        row = pattern->index[nz];
+        scaling->fScale[row] = fmax(scaling->fScale[row], fabs(scaling->jacobianWork[nz]));
+      }
+    }
+  } else {
+    for (column = 0; column < scaling->unknowns; column++) {
+      for (row = 0; row < scaling->equations; row++) {
+        scaling->fScale[row] = fmax(scaling->fScale[row],
+                                    fabs(scaling->jacobianWork[column * scaling->equations + row]));
+      }
+    }
+  }
+
+  for (row = 0; row < scaling->equations; row++) {
+    const modelica_real rowMaximum = scaling->fScale[row];
+    scaling->fScale[row] = !isfinite(rowMaximum) || rowMaximum == 0.0
+                             ? 1.0
+                             : 1.0 / fmax(rowMaximum, NLS_RESIDUAL_SCALE_FLOOR);
+  }
+
+  if (sparse) {
+    for (column = 0; column < scaling->unknowns; column++) {
+      for (nz = pattern->leadindex[column]; nz < pattern->leadindex[column + 1]; nz++) {
+        scaling->jacobianWork[nz] *= scaling->fScale[pattern->index[nz]];
+      }
+    }
+  } else {
+    for (column = 0; column < scaling->unknowns; column++) {
+      for (row = 0; row < scaling->equations; row++) {
+        scaling->jacobianWork[column * scaling->equations + row] *= scaling->fScale[row];
+      }
+    }
+  }
+}
+
 void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, modelica_integer equations, modelica_integer unknowns)
 {
   NONLINEAR_SYSTEM_DATA *nlsData = userData->nlsData;
@@ -317,9 +399,10 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
   const SPARSE_PATTERN *pattern;
   modelica_boolean sparse;
   size_t required;
-  modelica_integer column, row;
-  unsigned int nz;
-  volatile modelica_boolean failed = TRUE;
+  modelica_integer column;
+  modelica_integer attempt;
+  modelica_boolean haveReferenceJacobian = FALSE;
+  static const modelica_real perturbation[] = {0.0, 0.01, 0.1};
 
   assertStreamPrint(threadData, scaling != NULL, "Nonlinear system has no scaling data");
   assertStreamPrint(threadData, !scaling->prepared, "Nonlinear scaling is already prepared");
@@ -331,6 +414,7 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
   scaling->unknowns = unknowns;
   scaling->prepared = TRUE;
   scaling->activeMethod = omc_flag[FLAG_NO_SCALING] ? NLS_SCALING_IDENTITY : scaling->method;
+  scaling->referenceJacobianValid = FALSE;
 
   for (column = 0; column < unknowns; column++) {
     double scale = 1.0;
@@ -360,42 +444,22 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
     required = sparse ? pattern->nnz : equations * unknowns;
     assertStreamPrint(threadData, required <= scaling->jacobianCapacity, "Nonlinear scaling Jacobian work array is too small");
 
-    scaleVariables(scaling, xReference, scaling->zWork, nlsData->size);
-#ifndef OMC_EMCC
-    MMC_TRY_INTERNAL(simulationJumpBuffer)
-#endif
-    if (nlsJacobian(userData, scaling->zWork, scaling->jacobianWork, sparse, NLS_JACOBIAN_AUTO) == 0) {
-      failed = FALSE;
+    for (attempt = 0; attempt < 3 && !haveReferenceJacobian; attempt++) {
+      scaleVariables(scaling, xReference, scaling->zWork, nlsData->size);
+      for (column = 0; column < unknowns; column++) {
+        scaling->zWork[column] += perturbation[attempt] * (modelica_real) column / unknowns;
+      }
+      haveReferenceJacobian = tryReferenceJacobian(userData, sparse);
     }
-#ifndef OMC_EMCC
-    MMC_CATCH_INTERNAL(simulationJumpBuffer)
-#endif
-    if (failed) {
+    if (!haveReferenceJacobian) {
       warningStreamPrint(OMC_LOG_NLS, 0, "Could not evaluate the reference Jacobian; using nominal scaling only.");
       scaling->activeMethod = NLS_SCALING_NOMINAL;
       return;
     }
-
-    for (row = 0; row < equations; row++) {
-      scaling->fScale[row] = NLS_RESIDUAL_SCALE_FLOOR;
-    }
-    if (sparse) {
-      for (column = 0; column < unknowns; column++) {
-        for (nz = pattern->leadindex[column]; nz < pattern->leadindex[column + 1]; nz++) {
-          row = pattern->index[nz];
-          scaling->fScale[row] = fmax(scaling->fScale[row], fabs(scaling->jacobianWork[nz]));
-        }
-      }
-    } else {
-      for (column = 0; column < unknowns; column++) {
-        for (row = 0; row < equations; row++) {
-          scaling->fScale[row] = fmax(scaling->fScale[row], fabs(scaling->jacobianWork[column * equations + row]));
-        }
-      }
-    }
-    for (row = 0; row < equations; row++) {
-      scaling->fScale[row] = isfinite(scaling->fScale[row]) ? 1.0 / scaling->fScale[row] : 1.0;
-    }
+    scaleReferenceJacobian(userData, sparse);
+    scaling->referenceJacobianSize = required;
+    scaling->referenceJacobianSparse = sparse;
+    scaling->referenceJacobianValid = TRUE;
     return;
   }
 

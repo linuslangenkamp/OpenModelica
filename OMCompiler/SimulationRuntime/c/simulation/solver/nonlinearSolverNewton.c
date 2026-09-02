@@ -113,6 +113,7 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
   NLS_SOLVER_STATUS success = NLS_FAILED;
   int nfunc_evals = 0;
   double local_tol = solverData->ftol;
+  const double relaxed_tol = nlsRelaxedTolerance(data, local_tol);
 
   int giveUp = 0;
   int retries = 0;
@@ -263,11 +264,11 @@ NLS_SOLVER_STATUS solveNewton(DATA *data, threadData_t *threadData, NONLINEAR_SY
       nfunc_evals += solverData->nfev;
       infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t try to solve a discontinuous system.");
     }
-    else if(retries2 < 4)
+    else if(local_tol < relaxed_tol)
     {
       memcpy(solverData->x, scaling->zOld, solverData->n*(sizeof(double)));
       /* reduce tolarance */
-      local_tol = local_tol*10;
+      local_tol = fmin(local_tol*10, relaxed_tol);
 
       retries = 0;
       retries2++;

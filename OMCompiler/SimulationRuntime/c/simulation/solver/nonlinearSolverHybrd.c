@@ -246,7 +246,8 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
   double xerror_scaled;
   NLS_SOLVER_STATUS success = NLS_FAILED;
   modelica_boolean catchedError;
-  double local_tol = 1e-12;
+  double local_tol = newtonFTol;
+  const double relaxed_tol = nlsRelaxedTolerance(data, local_tol);
   double initial_factor = hybrdData->factor;
   int nfunc_evals = 0;
   modelica_boolean continuous = TRUE;
@@ -615,7 +616,7 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
         infoStreamPrint(OMC_LOG_NLS_V, 0, " - iteration making no progress:\t try nominal values as initial point.");
       }
     /* try to reduce the tolerance a bit */
-    } else if((hybrdData->info == 4 || hybrdData->info == 5) && retries3 < 6) {
+    } else if((hybrdData->info == 4 || hybrdData->info == 5) && local_tol < relaxed_tol) {
       /* set x vector */
       if(data->simulationInfo->discreteCall)
         memcpy(hybrdData->x, scaling->z, hybrdData->n*(sizeof(double)));
@@ -623,7 +624,7 @@ NLS_SOLVER_STATUS solveHybrd(DATA *data, threadData_t *threadData, NONLINEAR_SYS
         memcpy(hybrdData->x, scaling->zExtrapolation, hybrdData->n*(sizeof(double)));
 
       /* reduce tolarance */
-      local_tol = local_tol*10;
+      local_tol = fmin(local_tol*10, relaxed_tol);
 
       hybrdData->factor = initial_factor;
       hybrdData->mode = 2;

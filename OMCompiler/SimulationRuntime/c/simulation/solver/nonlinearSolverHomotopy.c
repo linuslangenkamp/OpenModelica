@@ -111,7 +111,6 @@ typedef struct DATA_HOMOTOPY
 
   /* debug arrays */
   double* debug_fJac;
-  double* debug_dx;
 
   /* homotopy parameters */
   int initHomotopy; /* homotopy method used for the initialization with lambda from the homotopy()-operator */
@@ -186,7 +185,6 @@ DATA_HOMOTOPY* allocateHomotopyData(size_t size, NLS_USERDATA* userData)
   homotopyData->fJacx0 = (double*) calloc((size*(size+1)),sizeof(double));
 
   /* debug arrays */
-  homotopyData->debug_dx = (double*) calloc(size,sizeof(double));
   homotopyData->debug_fJac = (double*) calloc((size*(size+1)),sizeof(double));
 
    /* homotopy */
@@ -221,7 +219,6 @@ DATA_HOMOTOPY* allocateHomotopyData(size_t size, NLS_USERDATA* userData)
 void freeHomotopyData(DATA_HOMOTOPY* homotopyData)
 {
   free(homotopyData->x);
-  free(homotopyData->debug_dx);
   free(homotopyData->finit);
   free(homotopyData->f1);
   free(homotopyData->f2);
@@ -841,12 +838,13 @@ static int wrapper_fvec_homotopy_fixpoint(DATA_HOMOTOPY* solverData, double* x, 
   int i;
   int n = solverData->n;
   int result;
+  NLS_SCALING_DATA *scaling = solverData->userData->nlsData->scaling;
 
   /* Fixpoint homotopy */
   result = wrapper_fvec(solverData, x, solverData->f1);
   if (result) return result;
   for (i=0; i<n; i++){
-    h[i] = x[n]*solverData->f1[i] + (1-x[n]) * (x[i]-solverData->x0[i]);
+    h[i] = x[n]*solverData->f1[i] + (1-x[n]) * scaling->fScale[i] / scaling->xScale[i] * (x[i]-solverData->x0[i]);
   }
 
   return 0;
@@ -862,16 +860,18 @@ static int wrapper_fvec_homotopy_fixpoint_der(DATA_HOMOTOPY* solverData, double*
   int i, j;
   int n = solverData->n;
   int result;
+  NLS_SCALING_DATA *scaling = solverData->userData->nlsData->scaling;
 
   /* Fixpoint homotopy */
   result = wrapper_fvec_der(solverData, x, hJac);
   if (result) return result;
   for (i=0; i<n; i++){
+    const double scale = scaling->fScale[i] / scaling->xScale[i];
     for (j=0; j<n; j++) {
       hJac[i+ j * n] = x[n]*hJac[i+ j * n];
     }
-    hJac[i+ i * n] = hJac[i+ i * n] + (1-x[n]);
-    hJac[i+ n * n] = solverData->f1[i]-(x[i] - solverData->x0[i]);
+    hJac[i+ i * n] = hJac[i+ i * n] + (1-x[n]) * scale;
+    hJac[i+ n * n] = solverData->f1[i] - scale * (x[i] - solverData->x0[i]);
   }
   return 0;
 }
@@ -1318,8 +1318,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
     debugVectorDouble(OMC_LOG_NLS_V, "scaled residuals:",solverData->f1, n);
 
     /* update delta_x_sqrd, error_f_sqrd */
-    for (i = 0; i < solverData->n; i++) solverData->debug_dx[i] = solverData->x1[i] - x[i];
-    delta_x_sqrd = vec2NormSqrd(solverData->n, solverData->debug_dx);
+    delta_x_sqrd = vec2NormSqrd(solverData->n, solverData->dy0);
 
     error_f_old = error_f_sqrd;
     error_f_sqrd = vec2NormSqrd(solverData->n, solverData->f1);
@@ -1343,7 +1342,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
       double errorFPhysicalSquared = 0.0;
 
       for (i = 0; i < solverData->n; i++) {
-        const double dx = nlsScalingPhysicalX(nlsData, i, solverData->debug_dx[i]);
+        const double dx = nlsScalingPhysicalX(nlsData, i, solverData->dy0[i]);
         const double f = nlsScalingPhysicalResidual(nlsData, i, solverData->f1[i]);
         deltaXPhysicalSquared += dx * dx;
         errorFPhysicalSquared += f * f;
@@ -1410,7 +1409,8 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
     /* check changes in unknown vector */
     if (delta_x_sqrd < solverData->xtol_sqrd || numberOfSmallSteps > 20)
     {
-      if (error_f_sqrd < solverData->ftol_sqrd*1e6)
+      const double relaxedFTol = nlsRelaxedTolerance(data, sqrt(solverData->ftol_sqrd));
+      if (error_f_sqrd < relaxedFTol*relaxedFTol)
       {
         solverData->info = 1;
 

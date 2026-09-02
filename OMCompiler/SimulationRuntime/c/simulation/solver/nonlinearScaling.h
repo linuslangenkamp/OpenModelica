@@ -52,6 +52,9 @@ struct NLS_SCALING_DATA {
   size_t jacobianCapacity;
   NLS_SCALING_METHOD method;
   NLS_SCALING_METHOD activeMethod;
+  size_t referenceJacobianSize;
+  modelica_boolean referenceJacobianSparse;
+  modelica_boolean referenceJacobianValid;
   modelica_boolean prepared;
 };
 
@@ -62,6 +65,7 @@ void nlsScalingPrepare(NLS_USERDATA *userData, const modelica_real *xReference, 
 void nlsScalingFinish(NONLINEAR_SYSTEM_DATA *nlsData);
 modelica_real nlsScalingPhysicalX(const NONLINEAR_SYSTEM_DATA *nlsData, modelica_integer index, modelica_real z);
 modelica_real nlsScalingPhysicalResidual(const NONLINEAR_SYSTEM_DATA *nlsData, modelica_integer index, modelica_real g);
+modelica_real nlsRelaxedTolerance(const DATA *data, modelica_real strictTolerance);
 
 int nlsResidual(NLS_USERDATA *userData, const modelica_real *z, modelica_real *g, const int *iflag);
 int nlsJacobian(NLS_USERDATA *userData, const modelica_real *z, modelica_real *jacobian, modelica_boolean sparse,

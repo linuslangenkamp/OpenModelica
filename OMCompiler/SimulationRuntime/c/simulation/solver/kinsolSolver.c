@@ -684,6 +684,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
   int flag;             /* KIN_* and KINLS_* codes, which are plain macros */
   SUNErrCode sunFlag;   /* SUNLinearSolver codes, which are not */
   double fNorm;
+  const double relaxedTolerance = nlsRelaxedTolerance(data, kinsolData->fnormtol);
   long outL;
 
   flag = KINSetNoInitSetup(kinsolData->kinsolMemory, SUNFALSE);
@@ -741,7 +742,7 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
   case KIN_LINIT_FAIL:
     errorStreamPrint(OMC_LOG_STDOUT, 0,
                      "KINSOL: The linear solver's initialization function failed.\n");
-    return errorCode;
+    return FALSE;
   case KIN_LSETUP_FAIL:
     /* In case something goes wrong with the symbolic jacobian try the numerical */
     warningStreamPrint(OMC_LOG_NLS_V, 0,
@@ -765,10 +766,10 @@ static modelica_boolean nlsKinsolErrorHandler(int errorCode, DATA *data,
 
   /* check if the current solution is sufficient anyway */
   KINGetFuncNorm(kinsolData->kinsolMemory, &fNorm);
-  if (fNorm < FTOL_WITH_LESS_ACCURACY) {
+  if (fNorm < relaxedTolerance) {
     warningStreamPrint(OMC_LOG_NLS_V, 0, "KINSOL: Move forward with a less accurate solution.");
-    KINSetFuncNormTol(kinsolData->kinsolMemory, FTOL_WITH_LESS_ACCURACY);
-    KINSetScaledStepTol(kinsolData->kinsolMemory, FTOL_WITH_LESS_ACCURACY);
+    KINSetFuncNormTol(kinsolData->kinsolMemory, relaxedTolerance);
+    KINSetScaledStepTol(kinsolData->kinsolMemory, relaxedTolerance);
     kinsolData->resetTol = TRUE;
     return TRUE;
   } else {
